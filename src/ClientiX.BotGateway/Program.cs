@@ -1,10 +1,15 @@
 using ClientiX.BotGateway;
+using ClientiX.Infrastructure.Persistence;
+using ClientiX.Infrastructure.Repositories;
+using ClientiX.Infrastructure.State;
+using Microsoft.EntityFrameworkCore;
 using Serilog;
+using StackExchange.Redis;
 using Telegram.Bot;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Serilog для красивых логов в консоли
+// Serilog
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
@@ -15,20 +20,34 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
-// Telegram Bot Client как singleton
+// Telegram Bot Client
 builder.Services.AddSingleton<ITelegramBotClient>(_ =>
 {
     var token = builder.Configuration["Telegram:MainBotToken"]
-        ?? throw new InvalidOperationException(
-            "Не задан токен главного бота. Положите его в appsettings.Development.json " +
-            "в секцию Telegram:MainBotToken");
+        ?? throw new InvalidOperationException("Не задан токен главного бота.");
     return new TelegramBotClient(token);
 });
 
-// Фоновый сервис long polling
+// DbContext
+builder.Services.AddDbContext<ClientiXDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Репозитории
+builder.Services.AddScoped<UserRepository>();
+
+// Redis
+var redisConn = builder.Configuration["Redis:Connection"]
+    ?? throw new InvalidOperationException("Не задана строка подключения к Redis");
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    _ => ConnectionMultiplexer.Connect(redisConn));
+
+// FSM состояния
+builder.Services.AddSingleton<UserStateService>();
+
+// Главный поллинг-сервис должен быть ПОСЛЕДНИМ — он зависит от всего выше
 builder.Services.AddHostedService<TelegramPollingService>();
 
-// Базовые сервисы Web API (понадобятся позже для webhook)
+// Web API stuff
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -40,7 +59,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// Health-check для будущих скриншотов и мониторинга
 app.MapGet("/health", () => Results.Ok(new
 {
     status = "healthy",

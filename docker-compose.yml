@@ -4,9 +4,9 @@ services:
     container_name: clientix-postgres
     environment:
       POSTGRES_USER: clientix
-      POSTGRES_PASSWORD: clientix_dev_pass
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: clientix
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]
     volumes: [postgres_data:/var/lib/postgresql/data]
 
   redis:
@@ -19,7 +19,7 @@ services:
     container_name: clientix-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: clientix
-      RABBITMQ_DEFAULT_PASS: clientix_dev_pass
+      RABBITMQ_DEFAULT_PASS: postgres
     ports: ["5672:5672", "15672:15672"]
 
 volumes:

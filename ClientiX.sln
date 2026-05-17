@@ -8,10 +8,20 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.Domain", "src\ClientiX.Domain\ClientiX.Domain.csproj", "{6553AE06-76CE-4AFC-A99C-BAA847C67707}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.Application", "src\ClientiX.Application\ClientiX.Application.csproj", "{14CB62ED-07CF-4948-8762-5ACD6D459B01}"
+	ProjectSection(ProjectDependencies) = postProject
+		{6553AE06-76CE-4AFC-A99C-BAA847C67707} = {6553AE06-76CE-4AFC-A99C-BAA847C67707}
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.Infrastructure", "src\ClientiX.Infrastructure\ClientiX.Infrastructure.csproj", "{47F4089B-6F8B-4245-865A-862ADDC5F3CD}"
+	ProjectSection(ProjectDependencies) = postProject
+		{14CB62ED-07CF-4948-8762-5ACD6D459B01} = {14CB62ED-07CF-4948-8762-5ACD6D459B01}
+		{6553AE06-76CE-4AFC-A99C-BAA847C67707} = {6553AE06-76CE-4AFC-A99C-BAA847C67707}
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.BotGateway", "src\ClientiX.BotGateway\ClientiX.BotGateway.csproj", "{CFF060CA-FD2B-4C47-A1C8-B0F7EA860931}"
+	ProjectSection(ProjectDependencies) = postProject
+		{47F4089B-6F8B-4245-865A-862ADDC5F3CD} = {47F4089B-6F8B-4245-865A-862ADDC5F3CD}
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.Core", "src\ClientiX.Core\ClientiX.Core.csproj", "{ED540E62-319E-499B-B7FD-E59FE638720A}"
 EndProject
