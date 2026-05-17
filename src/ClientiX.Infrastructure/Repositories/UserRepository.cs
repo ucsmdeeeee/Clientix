@@ -130,4 +130,58 @@ public class UserRepository
 
         await _db.SaveChangesAsync(ct);
     }
+
+    /// <summary>
+    /// Получает все активные услуги мастера.
+    /// </summary>
+    public async Task<List<Service>> GetServicesAsync(long userId, CancellationToken ct)
+    {
+        return await _db.Services
+            .Where(s => s.UserId == userId && s.IsActive)
+            .OrderBy(s => s.SortOrder)
+            .ThenBy(s => s.Id)
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Добавляет новую услугу мастеру.
+    /// </summary>
+    public async Task<Service> AddServiceAsync(
+        long userId, string name, int durationMinutes, int priceRub, CancellationToken ct)
+    {
+        var maxSort = await _db.Services
+            .Where(s => s.UserId == userId)
+            .Select(s => (int?)s.SortOrder)
+            .MaxAsync(ct) ?? 0;
+
+        var service = new Service
+        {
+            UserId = userId,
+            Name = name,
+            DurationMinutes = durationMinutes,
+            PriceRub = priceRub,
+            BufferAfterMinutes = 0,
+            IsActive = true,
+            SortOrder = maxSort + 1,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _db.Services.Add(service);
+        await _db.SaveChangesAsync(ct);
+        return service;
+    }
+
+    /// <summary>
+    /// Мягко удаляет услугу (помечает как неактивную).
+    /// </summary>
+    public async Task<bool> SoftDeleteServiceAsync(long userId, long serviceId, CancellationToken ct)
+    {
+        var service = await _db.Services
+            .FirstOrDefaultAsync(s => s.Id == serviceId && s.UserId == userId, ct);
+        if (service is null) return false;
+
+        service.IsActive = false;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
 }
