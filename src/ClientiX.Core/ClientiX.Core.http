@@ -1,0 +1,6 @@
+@ClientiX.Core_HostAddress = http://localhost:5190
+
+GET {{ClientiX.Core_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

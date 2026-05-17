@@ -1,0 +1,6 @@
+@ClientiX.BotGateway_HostAddress = http://localhost:5211
+
+GET {{ClientiX.BotGateway_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
