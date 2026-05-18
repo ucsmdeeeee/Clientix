@@ -2069,13 +2069,26 @@ public class TelegramPollingService : BackgroundService
 
         var prevMonth = firstOfMonth.AddMonths(-1);
         var nextMonth = firstOfMonth.AddMonths(1);
+
+        // Ограничиваем навигацию: назад — только до текущего месяца, вперёд — до конца горизонта
+        var currentMonthFirst = new DateTime(nowLocal.Year, nowLocal.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        var horizonEnd = nowLocal.Date.AddDays(user.BookingHorizonDays);
+        var horizonMonthFirst = new DateTime(horizonEnd.Year, horizonEnd.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+
+        var navPrev = prevMonth >= currentMonthFirst
+            ? InlineKeyboardButton.WithCallbackData("«", $"cal_nav:{prevMonth:yyyy-MM}")
+            : InlineKeyboardButton.WithCallbackData(" ", "noop");
+
+        var navNext = nextMonth <= horizonMonthFirst
+            ? InlineKeyboardButton.WithCallbackData("»", $"cal_nav:{nextMonth:yyyy-MM}")
+            : InlineKeyboardButton.WithCallbackData(" ", "noop");
+
         buttons.Add(new[]
         {
-        InlineKeyboardButton.WithCallbackData("«", $"cal_nav:{prevMonth:yyyy-MM}"),
-        InlineKeyboardButton.WithCallbackData(
-            monthName, "noop"),
-        InlineKeyboardButton.WithCallbackData("»", $"cal_nav:{nextMonth:yyyy-MM}")
-    });
+    navPrev,
+    InlineKeyboardButton.WithCallbackData(monthName, "noop"),
+    navNext
+});
 
         buttons.Add(new[]
         {
@@ -2112,9 +2125,9 @@ public class TelegramPollingService : BackgroundService
                 emoji = (template?.IsWorking ?? false) ? "🟢" : "🔴";
             }
 
-            row.Add(InlineKeyboardButton.WithCallbackData(
-                $"{emoji}{day}",
-                $"cal_day:{date:yyyy-MM-dd}"));
+            // Прошедшие даты в текущем месяце не кликабельны
+            var callback_ = date.Date < nowLocal.Date ? "noop" : $"cal_day:{date:yyyy-MM-dd}";
+            row.Add(InlineKeyboardButton.WithCallbackData($"{emoji}{day}", callback_));
 
             if (row.Count == 7)
             {
