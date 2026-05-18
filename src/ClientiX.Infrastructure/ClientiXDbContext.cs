@@ -169,6 +169,11 @@ public class ClientiXDbContext : DbContext
             b.ToTable("portfolio_items");
             b.HasIndex(x => new { x.UserId, x.SortOrder });
             b.Property(x => x.TelegramFileId).HasMaxLength(256).IsRequired();
+            b.Property(x => x.FileIdsPerBot)
+                .HasColumnType("jsonb")
+                .HasConversion(
+            v => v == null ? null : System.Text.Json.JsonSerializer.Serialize(v, (System.Text.Json.JsonSerializerOptions?)null),
+            v => v == null ? null : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(v, (System.Text.Json.JsonSerializerOptions?)null));
             b.Property(x => x.Caption).HasMaxLength(512);
             b.HasOne(x => x.User).WithMany(u => u.PortfolioItems)
              .HasForeignKey(x => x.UserId)

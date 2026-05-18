@@ -431,4 +431,23 @@ public class UserRepository
             .Include(u => u.ManagedBot)
             .FirstOrDefaultAsync(u => u.Id == userId, ct);
     }
+
+    /// <summary>
+    /// Сохраняет file_id фото для конкретного бота мастера.
+    /// </summary>
+    public async Task SetPortfolioFileIdForBotAsync(
+        long itemId, long botTelegramId, string newFileId, CancellationToken ct)
+    {
+        var item = await _db.PortfolioItems
+            .FirstOrDefaultAsync(p => p.Id == itemId, ct);
+        if (item is null) return;
+
+        item.FileIdsPerBot ??= new Dictionary<string, string>();
+        item.FileIdsPerBot[botTelegramId.ToString()] = newFileId;
+
+        // EF Core не отслеживает изменения в Dictionary автоматически — пинаем
+        _db.Entry(item).Property(x => x.FileIdsPerBot).IsModified = true;
+
+        await _db.SaveChangesAsync(ct);
+    }
 }

@@ -172,7 +172,7 @@ public class MasterBotUpdateHandler
                 break;
 
             case "client_portfolio":
-                await SendPortfolioAsync(bot, chatId, master.Id, users, ct);
+                await SendPortfolioAsync(bot, chatId, ctx, users, ct);
                 break;
 
             case "client_about":
@@ -231,10 +231,10 @@ public class MasterBotUpdateHandler
     }
 
     private async Task SendPortfolioAsync(
-        ITelegramBotClient bot, long chatId, long masterId,
-        UserRepository users, CancellationToken ct)
+    ITelegramBotClient bot, long chatId, MasterBotContext ctx,
+    UserRepository users, CancellationToken ct)
     {
-        var items = await users.GetPortfolioAsync(masterId, ct);
+        var items = await users.GetPortfolioAsync(ctx.UserId, ct);
 
         if (items.Count == 0)
         {
@@ -252,25 +252,40 @@ public class MasterBotUpdateHandler
             $"🖼 Портфолио мастера ({items.Count} {GetWorksWord(items.Count)})",
             cancellationToken: ct);
 
-        // Отправляем фотографии группой по 10 (лимит Telegram).
-        // Если работ больше 10 — несколько групп.
-        foreach (var batch in items.Chunk(10))
+        var botKey = ctx.BotTelegramId.ToString();
+
+        foreach (var item in items)
         {
-            var media = batch.Select((item, idx) =>
-                new InputMediaPhoto(InputFile.FromFileId(item.TelegramFileId))
-                {
-                    Caption = idx == 0 || string.IsNullOrEmpty(item.Caption)
-                        ? item.Caption
-                        : item.Caption
-                }).Cast<IAlbumInputMedia>().ToArray();
+            // Проверяем, есть ли уже file_id для этого бота
+            string? fileIdForThisBot = null;
+            if (item.FileIdsPerBot is not null && item.FileIdsPerBot.TryGetValue(botKey, out var cached))
+            {
+                fileIdForThisBot = cached;
+            }
 
             try
             {
-                await bot.SendMediaGroup(chatId, media, cancellationToken: ct);
+                if (fileIdForThisBot is not null)
+                {
+                    // Быстрый путь: file_id уже знаком этому боту
+                    await bot.SendPhoto(
+                        chatId: chatId,
+                        photo: InputFile.FromFileId(fileIdForThisBot),
+                        caption: item.Caption,
+                        cancellationToken: ct);
+                }
+                else
+                {
+                    // Первая отправка через этого бота: скачиваем из главного бота,
+                    // загружаем в этот, кэшируем новый file_id.
+                    await SendPhotoCrossBotAsync(bot, chatId, item, botKey, users, ct);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Не удалось отправить группу фото портфолио");
+                _logger.LogWarning(ex,
+                    "Не удалось отправить фото портфолио id={ItemId} через бот @{Bot}",
+                    item.Id, ctx.BotUsername);
             }
         }
 
@@ -282,6 +297,44 @@ public class MasterBotUpdateHandler
             new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
             }),
             cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Скачивает фото из главного бота и загружает в бот мастера, кэширует новый file_id.
+    /// </summary>
+    private async Task SendPhotoCrossBotAsync(
+        ITelegramBotClient masterBot, long chatId,
+        Domain.Entities.PortfolioItem item, string botKey,
+        UserRepository users, CancellationToken ct)
+    {
+        // Достаём главный бот из DI
+        using var scope = _scopeFactory.CreateScope();
+        var mainBot = scope.ServiceProvider.GetRequiredService<ITelegramBotClient>();
+
+        // Скачиваем файл из главного бота
+        using var stream = new MemoryStream();
+        var file = await mainBot.GetFile(item.TelegramFileId, ct);
+        if (file.FilePath is null) return;
+
+        await mainBot.DownloadFile(file.FilePath, stream, ct);
+        stream.Position = 0;
+
+        // Загружаем в бот мастера, отправляем клиенту
+        var sentMessage = await masterBot.SendPhoto(
+            chatId: chatId,
+            photo: InputFile.FromStream(stream, "photo.jpg"),
+            caption: item.Caption,
+            cancellationToken: ct);
+
+        // Берём file_id, который получился у бота мастера
+        var newFileId = sentMessage.Photo?.LastOrDefault()?.FileId;
+        if (newFileId is not null)
+        {
+            await users.SetPortfolioFileIdForBotAsync(item.Id, long.Parse(botKey), newFileId, ct);
+            _logger.LogInformation(
+                "Сохранили file_id портфолио для бота {BotKey}: item={ItemId}",
+                botKey, item.Id);
+        }
     }
 
     private async Task SendAboutMasterAsync(

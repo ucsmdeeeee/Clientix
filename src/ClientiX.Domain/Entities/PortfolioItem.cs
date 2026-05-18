@@ -14,4 +14,11 @@ public class PortfolioItem
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public User User { get; set; } = null!;
+
+    /// <summary>
+    /// Словарь file_id для разных ботов: ключ = bot_telegram_id, значение = file_id.
+    /// Сериализуется в JSONB.
+    /// Если file_id для конкретного бота нет — нужно перезалить через этот бот.
+    /// </summary>
+    public Dictionary<string, string>? FileIdsPerBot { get; set; }
 }
