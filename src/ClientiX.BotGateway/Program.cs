@@ -39,6 +39,7 @@ builder.Services.AddDbContext<ClientiXDbContext>(options =>
 // Репозитории
 builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<PaymentRepository>();
+builder.Services.AddScoped<ClientiX.Infrastructure.Bookings.BookingSlotService>();
 
 // Redis
 var redisConn = builder.Configuration["Redis:Connection"]
