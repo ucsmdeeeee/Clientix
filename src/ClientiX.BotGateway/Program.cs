@@ -68,6 +68,22 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+// Автоматически применяем миграции БД при старте
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ClientiXDbContext>();
+    try
+    {
+        db.Database.Migrate();
+        Log.Information("Миграции БД применены");
+    }
+    catch (Exception ex)
+    {
+        Log.Fatal(ex, "Не удалось применить миграции БД");
+        throw;
+    }
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();

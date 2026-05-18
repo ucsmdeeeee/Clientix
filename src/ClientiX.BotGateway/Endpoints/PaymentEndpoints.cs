@@ -111,20 +111,67 @@ public static class PaymentEndpoints
                 """, "text/html; charset=utf-8");
         });
 
-        // Реальный webhook от ЮKassa — будет включён после получения ключей
+        // Реальный webhook от ЮKassa
         app.MapPost("/yk-webhook", async (
             HttpContext ctx,
+            ClientiX.Infrastructure.Payments.YooKassaPaymentService ykService,
             PaymentRepository payments,
+            ITelegramBotClient bot,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
             using var reader = new StreamReader(ctx.Request.Body);
             var body = await reader.ReadToEndAsync(ct);
 
-            logger.LogInformation("Получен webhook ЮKassa: {Body}", body);
+            logger.LogInformation("Webhook ЮKassa получен: {Body}", body);
 
-            // TODO: распарсить JSON, найти Payment по metadata.payment_id,
-            // вызвать MarkAsSucceededAndExtendSubscriptionAsync с реальным yk_payment_id
+            var parsed = ykService.ParseWebhook(body);
+            if (parsed is null)
+            {
+                return Results.BadRequest(new { error = "invalid_webhook" });
+            }
+
+            logger.LogInformation(
+                "Webhook ЮKassa разобран: event={Event}, status={Status}, paymentId={PaymentId}, yk_id={YkId}",
+                parsed.Event, parsed.Status, parsed.InternalPaymentId, parsed.YooKassaPaymentId);
+
+            if (parsed.Status != "succeeded")
+            {
+                // ЮKassa шлёт несколько событий: waiting_for_capture, succeeded, canceled.
+                // Активируем подписку только при succeeded.
+                return Results.Ok(new { received = true, ignored_status = parsed.Status });
+            }
+
+            var payment = await payments.GetByIdAsync(parsed.InternalPaymentId, ct);
+            if (payment is null)
+            {
+                logger.LogWarning("Платёж {Id} не найден в БД", parsed.InternalPaymentId);
+                return Results.NotFound();
+            }
+
+            var ok = await payments.MarkAsSucceededAndExtendSubscriptionAsync(
+                parsed.InternalPaymentId,
+                parsed.YooKassaPaymentId,
+                ct);
+
+            if (ok)
+            {
+                try
+                {
+                    await bot.SendMessage(
+                        chatId: payment.User.TelegramId,
+                        text:
+                            $"✅ Оплата прошла успешно!\n\n" +
+                            $"📅 Подписка активна до: {payment.User.Subscription?.CurrentPeriodEnd:dd.MM.yyyy}\n" +
+                            $"💰 Сумма: {payment.AmountRub} руб.\n\n" +
+                            $"Спасибо за доверие к ClientiX!",
+                        cancellationToken: ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Не удалось отправить уведомление пользователю");
+                }
+            }
 
             return Results.Ok(new { received = true });
         });
