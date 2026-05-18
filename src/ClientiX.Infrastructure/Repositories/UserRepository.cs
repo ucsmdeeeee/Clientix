@@ -371,4 +371,53 @@ public class UserRepository
         await _db.SaveChangesAsync(ct);
         return true;
     }
+
+    /// <summary>
+    /// Список фотографий портфолио мастера.
+    /// </summary>
+    public async Task<List<PortfolioItem>> GetPortfolioAsync(long userId, CancellationToken ct)
+    {
+        return await _db.PortfolioItems
+            .Where(p => p.UserId == userId)
+            .OrderByDescending(p => p.CreatedAt)
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Добавить фото в портфолио. Сохраняем только telegram_file_id —
+    /// сам файл хранится на серверах Telegram, мы лишь ссылаемся.
+    /// </summary>
+    public async Task<PortfolioItem> AddPortfolioAsync(
+        long userId, string telegramFileId, string? caption, CancellationToken ct)
+    {
+        var maxSort = await _db.PortfolioItems
+            .Where(p => p.UserId == userId)
+            .Select(p => (int?)p.SortOrder)
+            .MaxAsync(ct) ?? 0;
+
+        var item = new PortfolioItem
+        {
+            UserId = userId,
+            TelegramFileId = telegramFileId,
+            Caption = caption,
+            SortOrder = maxSort + 1,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _db.PortfolioItems.Add(item);
+        await _db.SaveChangesAsync(ct);
+        return item;
+    }
+
+    public async Task<bool> DeletePortfolioAsync(
+        long userId, long itemId, CancellationToken ct)
+    {
+        var item = await _db.PortfolioItems
+            .FirstOrDefaultAsync(p => p.Id == itemId && p.UserId == userId, ct);
+        if (item is null) return false;
+
+        _db.PortfolioItems.Remove(item);
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
 }

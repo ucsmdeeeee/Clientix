@@ -61,21 +61,38 @@ public class TelegramPollingService : BackgroundService
     {
         try
         {
-            if (update.Message is { Text: not null } message)
+            if (update.Message is { } message)
             {
-                _logger.LogInformation(
-                    "Сообщение от @{Username} (id {UserId}): {Text}",
-                    message.From?.Username ?? "—",
-                    message.From?.Id,
-                    message.Text);
+                if (message.Text is not null)
+                {
+                    _logger.LogInformation(
+                        "Сообщение от @{Username} (id {UserId}): {Text}",
+                        message.From?.Username ?? "—",
+                        message.From?.Id,
+                        message.Text);
 
-                if (message.Text.StartsWith("/start"))
-                {
-                    await HandleStartAsync(bot, message, ct);
+                    if (message.Text.StartsWith("/start"))
+                    {
+                        await HandleStartAsync(bot, message, ct);
+                    }
+                    else
+                    {
+                        await HandleTextMessageAsync(bot, message, ct);
+                    }
                 }
-                else
+                else if (message.Photo is { Length: > 0 } photos)
                 {
-                    await HandleTextMessageAsync(bot, message, ct);
+                    // Telegram присылает несколько размеров одного фото —
+                    // берём самый большой (последний в массиве)
+                    var largest = photos[^1];
+                    await HandlePhotoUploadAsync(bot, message, largest.FileId, ct);
+                }
+                else if (message.Document is { } doc &&
+                         doc.MimeType is not null &&
+                         doc.MimeType.StartsWith("image/"))
+                {
+                    // Фото, отправленное как файл
+                    await HandlePhotoUploadAsync(bot, message, doc.FileId, ct);
                 }
             }
             else if (update.CallbackQuery is { } callback)
@@ -208,6 +225,18 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        if (data.StartsWith("pfl_del:"))
+        {
+            await HandlePortfolioDeleteAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("pfl_view:"))
+        {
+            await HandlePortfolioViewAsync(bot, callback, ct);
+            return;
+        }
+
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
         switch (data)
@@ -269,6 +298,14 @@ public class TelegramPollingService : BackgroundService
 
             case "schedule_exception_add":
                 await StartAddExceptionFsmAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "portfolio":
+                await SendPortfolioAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "portfolio_add":
+                await StartAddPortfolioFsmAsync(bot, chatId, telegramId, ct);
                 break;
 
             default:
@@ -360,6 +397,9 @@ public class TelegramPollingService : BackgroundService
                 break;
             case "excpt_note":
                 await HandleExceptionNoteAsync(bot, message, state, ct);
+                break;
+            case "pfl_caption":
+                await HandlePortfolioCaptionAsync(bot, message, state, ct);
                 break;
             default:
                 await bot.SendMessage(message.Chat.Id,
@@ -569,6 +609,7 @@ public class TelegramPollingService : BackgroundService
         var keyboard = new InlineKeyboardMarkup(new[]
 {
     new[] { InlineKeyboardButton.WithCallbackData("📋 Мои услуги", "services") },
+    new[] { InlineKeyboardButton.WithCallbackData("🖼 Моё портфолио", "portfolio") },
     new[] { InlineKeyboardButton.WithCallbackData("📅 Моё расписание", "schedule") },
     new[] { InlineKeyboardButton.WithCallbackData("💎 Моя подписка", "subscription_info") },
     new[] { InlineKeyboardButton.WithCallbackData("🤝 Пригласить мастера", "referral") },
@@ -1477,5 +1518,210 @@ public class TelegramPollingService : BackgroundService
     private static string FormatTime(int minutes)
     {
         return $"{minutes / 60:00}:{minutes % 60:00}";
+    }
+
+    // ============================================================
+    // ПОРТФОЛИО МАСТЕРА
+    // ============================================================
+
+    private async Task SendPortfolioAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var items = await users.GetPortfolioAsync(user.Id, ct);
+
+        string text;
+        if (items.Count == 0)
+        {
+            text = "🖼 Моё портфолио\n\n" +
+                   "Пока ни одной работы не загружено.\n\n" +
+                   "Загруженные фото будут видны вашим клиентам " +
+                   "в карточке мастера. Это сильно повышает доверие.";
+        }
+        else
+        {
+            text = $"🖼 Ваше портфолио: {items.Count} {GetWorksWord(items.Count)}\n\n" +
+                   "Нажмите на работу, чтобы посмотреть или удалить.";
+        }
+
+        var buttons = new List<InlineKeyboardButton[]>
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("➕ Добавить фото", "portfolio_add") }
+    };
+
+        int idx = 1;
+        foreach (var item in items.Take(10))
+        {
+            var label = string.IsNullOrEmpty(item.Caption)
+                ? $"📷 Работа #{idx}"
+                : $"📷 {Truncate(item.Caption, 30)}";
+            buttons.Add(new[] {
+            InlineKeyboardButton.WithCallbackData(label, $"pfl_view:{item.Id}")
+        });
+            idx++;
+        }
+
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet") });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandlePortfolioViewAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("pfl_view:", ""), out var itemId)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var items = await users.GetPortfolioAsync(user.Id, ct);
+        var item = items.FirstOrDefault(x => x.Id == itemId);
+        if (item is null) return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] { InlineKeyboardButton.WithCallbackData("🗑 Удалить", $"pfl_del:{item.Id}") },
+        new[] { InlineKeyboardButton.WithCallbackData("« К портфолио", "portfolio") }
+    });
+
+        await bot.SendPhoto(
+            chatId: chatId,
+            photo: Telegram.Bot.Types.InputFile.FromFileId(item.TelegramFileId),
+            caption: string.IsNullOrEmpty(item.Caption) ? "Без подписи" : item.Caption,
+            replyMarkup: keyboard,
+            cancellationToken: ct);
+    }
+
+    private async Task HandlePortfolioDeleteAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("pfl_del:", ""), out var itemId)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var ok = await users.DeletePortfolioAsync(user.Id, itemId, ct);
+        var chatId = callback.Message!.Chat.Id;
+
+        await bot.SendMessage(chatId,
+            ok ? "🗑 Работа удалена из портфолио." : "Не удалось удалить.",
+            cancellationToken: ct);
+
+        await SendPortfolioAsync(bot, chatId, callback.From.Id, ct);
+    }
+
+    private async Task StartAddPortfolioFsmAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        var state = new UserState { CurrentStep = "pfl_photo" };
+        await _states.SetAsync(telegramId, state);
+
+        await bot.SendMessage(chatId,
+            "🖼 Добавление работы в портфолио\n\n" +
+            "Шаг 1 из 2: отправьте фото работы.\n\n" +
+            "Можно прикрепить через скрепку 📎 как изображение " +
+            "или как файл (тогда сохранится в оригинальном качестве).",
+            cancellationToken: ct);
+    }
+
+    private async Task HandlePhotoUploadAsync(
+        ITelegramBotClient bot, Message message, string telegramFileId, CancellationToken ct)
+    {
+        if (message.From is null) return;
+
+        var state = await _states.GetAsync(message.From.Id);
+
+        // Если пользователь не в FSM добавления портфолио — просто игнорируем фото
+        if (state?.CurrentStep != "pfl_photo")
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Чтобы добавить фото в портфолио, зайдите в:\n" +
+                "📊 Мой кабинет → 🖼 Моё портфолио → ➕ Добавить фото",
+                cancellationToken: ct);
+            return;
+        }
+
+        state.Data["file_id"] = telegramFileId;
+        state.CurrentStep = "pfl_caption";
+        await _states.SetAsync(message.From.Id, state);
+
+        await bot.SendMessage(message.Chat.Id,
+            "Принял фото 📷\n\n" +
+            "Шаг 2 из 2: добавьте подпись (необязательно).\n" +
+            "Например: «Французский маникюр» или «Стрижка градиент».\n\n" +
+            "Или отправьте «-» чтобы пропустить.",
+            cancellationToken: ct);
+    }
+
+    private async Task HandlePortfolioCaptionAsync(
+        ITelegramBotClient bot, Message message, UserState state, CancellationToken ct)
+    {
+        var caption = (message.Text ?? "").Trim();
+        if (caption == "-" || caption.ToLower() == "пропустить") caption = "";
+
+        if (caption.Length > 500)
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Подпись слишком длинная (макс 500 символов). Попробуйте короче.",
+                cancellationToken: ct);
+            return;
+        }
+
+        if (!state.Data.TryGetValue("file_id", out var fileId) || string.IsNullOrEmpty(fileId))
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Не нашёл фото. Начните заново через ➕ Добавить фото.",
+                cancellationToken: ct);
+            await _states.ClearAsync(message.From!.Id);
+            return;
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(message.From!.Id, ct);
+        if (user is null) return;
+
+        var item = await users.AddPortfolioAsync(
+            user.Id, fileId, string.IsNullOrEmpty(caption) ? null : caption, ct);
+        await _states.ClearAsync(message.From.Id);
+
+        _logger.LogInformation(
+            "Добавлено фото в портфолио: user={UserId}, item={ItemId}",
+            user.Id, item.Id);
+
+        await bot.SendMessage(message.Chat.Id,
+            $"✅ Работа добавлена в портфолио!" +
+            (string.IsNullOrEmpty(caption) ? "" : $"\n\n📝 Подпись: {caption}"),
+            cancellationToken: ct);
+
+        await SendPortfolioAsync(bot, message.Chat.Id, message.From.Id, ct);
+    }
+
+    private static string GetWorksWord(int count)
+    {
+        int n = count % 100;
+        if (n >= 11 && n <= 19) return "работ";
+        return (n % 10) switch
+        {
+            1 => "работа",
+            2 or 3 or 4 => "работы",
+            _ => "работ"
+        };
     }
 }

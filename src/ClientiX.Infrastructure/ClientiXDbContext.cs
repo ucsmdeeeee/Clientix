@@ -162,5 +162,17 @@ public class ClientiXDbContext : DbContext
              .HasForeignKey(x => x.UserId)
              .OnDelete(DeleteBehavior.Cascade);
         });
+
+        // --- PortfolioItem ---
+        modelBuilder.Entity<PortfolioItem>(b =>
+        {
+            b.ToTable("portfolio_items");
+            b.HasIndex(x => new { x.UserId, x.SortOrder });
+            b.Property(x => x.TelegramFileId).HasMaxLength(256).IsRequired();
+            b.Property(x => x.Caption).HasMaxLength(512);
+            b.HasOne(x => x.User).WithMany(u => u.PortfolioItems)
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }
