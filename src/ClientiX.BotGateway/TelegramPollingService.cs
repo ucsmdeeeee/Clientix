@@ -199,14 +199,7 @@ public class TelegramPollingService : BackgroundService
                 break;
 
             case "tariffs":
-                await bot.SendMessage(chatId,
-                    "💎 Тарифы ClientiX\n\n" +
-                    "🎉 7 дней — бесплатный пробный период\n\n" +
-                    "Подписка (первая оплата / продление):\n" +
-                    "▪️ 30 дней — 300 руб. / 500 руб.\n" +
-                    "▪️ 90 дней — 1000 руб. / 1300 руб.\n" +
-                    "▪️ 180 дней — 2000 руб. / 2400 руб.",
-                    cancellationToken: ct);
+                await SendTariffsAsync(bot, chatId, telegramId, ct);
                 break;
 
             case "cabinet":
@@ -240,6 +233,12 @@ public class TelegramPollingService : BackgroundService
 
             case "subscription_info":
                 await SendSubscriptionInfoAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "buy_30":
+            case "buy_90":
+            case "buy_180":
+                await StartPaymentAsync(bot, chatId, telegramId, data, ct);
                 break;
 
             default:
@@ -919,5 +918,105 @@ public class TelegramPollingService : BackgroundService
         return new string(Enumerable.Range(0, 32)
             .Select(_ => chars[random.Next(chars.Length)])
             .ToArray());
+    }
+
+    /// <summary>
+    /// Показывает тарифные планы с кнопками оформления подписки.
+    /// </summary>
+    private async Task SendTariffsAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+
+        // Дифференцированные цены: первая оплата дешевле продления
+        bool isFirstPayment = user?.HasMadeFirstPayment == false;
+
+        var price30 = isFirstPayment ? 300 : 500;
+        var price90 = isFirstPayment ? 1000 : 1300;
+        var price180 = isFirstPayment ? 2000 : 2400;
+
+        var text =
+            $"💎 Тарифы ClientiX\n\n" +
+            $"🎉 7 дней — бесплатный пробный период\n\n" +
+            (isFirstPayment ? "🎁 Специальная цена первой оплаты:\n" : "💼 Цена продления:\n") +
+            $"\n" +
+            $"📅 30 дней — {price30} руб.\n" +
+            $"📅 90 дней — {price90} руб.\n" +
+            $"📅 180 дней — {price180} руб.\n\n" +
+            $"💳 Оплата через ЮKassa. Чек придёт на email после оплаты.";
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] { InlineKeyboardButton.WithCallbackData($"📅 30 дней за {price30} руб.", "buy_30") },
+        new[] { InlineKeyboardButton.WithCallbackData($"📅 90 дней за {price90} руб.", "buy_90") },
+        new[] { InlineKeyboardButton.WithCallbackData($"📅 180 дней за {price180} руб.", "buy_180") },
+        new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") }
+    });
+
+        await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Создаёт платёж в БД и отправляет пользователю ссылку на оплату.
+    /// </summary>
+    private async Task StartPaymentAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, string data, CancellationToken ct)
+    {
+        var tariffCode = data switch
+        {
+            "buy_30" => "days_30",
+            "buy_90" => "days_90",
+            "buy_180" => "days_180",
+            _ => null
+        };
+        if (tariffCode is null) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var payments = scope.ServiceProvider.GetRequiredService<PaymentRepository>();
+        var ykService = scope.ServiceProvider
+            .GetRequiredService<ClientiX.Infrastructure.Payments.YooKassaPaymentService>();
+
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var tariff = await payments.GetTariffByCodeAsync(tariffCode, ct);
+        if (tariff is null)
+        {
+            await bot.SendMessage(chatId, "Тариф не найден.", cancellationToken: ct);
+            return;
+        }
+
+        bool isFirstPayment = !user.HasMadeFirstPayment;
+        int amountRub = isFirstPayment ? tariff.PriceFirstRub : tariff.PriceRenewRub;
+
+        var payment = await payments.CreatePendingPaymentAsync(
+            user.Id, tariff.Id, amountRub, isFirstPayment, ct);
+
+        var description = $"ClientiX: подписка на {tariff.DurationDays} дней";
+        var paymentLink = await ykService.CreatePaymentLinkAsync(payment, description, ct);
+
+        _logger.LogInformation(
+            "Создан платёж: id={PaymentId}, user={UserId}, tariff={Tariff}, amount={Amount}",
+            payment.Id, user.Id, tariff.Code, amountRub);
+
+        // Telegram не принимает http://localhost в URL-кнопках, поэтому даём ссылку
+        // текстом + отдельную кнопку «назад». На проде здесь будет реальный HTTPS-URL от ЮKassa.
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+    new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") }
+});
+
+        await bot.SendMessage(chatId,
+            $"💳 Оформление подписки\n\n" +
+            $"📅 Тариф: {tariff.DurationDays} дней\n" +
+            $"💰 Сумма: {amountRub} руб.\n" +
+            $"#️⃣ Номер платежа: {payment.Id}\n\n" +
+            $"🔗 Ссылка на оплату:\n{paymentLink}\n\n" +
+            $"После успешной оплаты подписка будет активирована автоматически.",
+            replyMarkup: keyboard,
+            cancellationToken: ct);
     }
 }

@@ -8,6 +8,7 @@ using Serilog;
 using StackExchange.Redis;
 using Telegram.Bot;
 using Microsoft.AspNetCore.DataProtection;
+using ClientiX.BotGateway.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,6 +37,7 @@ builder.Services.AddDbContext<ClientiXDbContext>(options =>
 
 // –епозитории
 builder.Services.AddScoped<UserRepository>();
+builder.Services.AddScoped<PaymentRepository>();
 
 // Redis
 var redisConn = builder.Configuration["Redis:Connection"]
@@ -57,6 +59,9 @@ builder.Services.AddSingleton<TokenProtector>();
 // √лавный поллинг-сервис должен быть ѕќ—Ћ≈ƒЌ»ћ Ч он зависит от всего выше
 builder.Services.AddHostedService<TelegramPollingService>();
 
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<ClientiX.Infrastructure.Payments.YooKassaPaymentService>();
+
 // Web API stuff
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -77,6 +82,8 @@ app.MapGet("/health", () => Results.Ok(new
 }));
 
 app.MapGet("/", () => "ClientiX BotGateway is running. Telegram polling active.");
+
+app.MapPaymentEndpoints();
 
 try
 {
