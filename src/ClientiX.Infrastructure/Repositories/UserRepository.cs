@@ -527,4 +527,32 @@ public class UserRepository
         user.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
     }
+
+    /// <summary>
+    /// Переносит запись на новое время (с защитой от пересечений).
+    /// </summary>
+    public async Task<bool> RescheduleBookingAsync(
+        long bookingId, DateTime newStartsAt, DateTime newEndsAt, CancellationToken ct)
+    {
+        var booking = await _db.Bookings
+            .FirstOrDefaultAsync(b => b.Id == bookingId, ct);
+        if (booking is null) return false;
+
+        booking.StartsAt = newStartsAt;
+        booking.EndsAt = newEndsAt;
+        booking.UpdatedAt = DateTime.UtcNow;
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            return true;
+        }
+        catch (DbUpdateException ex) when (
+            ex.InnerException?.Message.Contains("idx_bookings_no_overlap") == true)
+        {
+            // Откатываем изменения в трекинге — слот занят кем-то ещё
+            await _db.Entry(booking).ReloadAsync(ct);
+            return false;
+        }
+    }
 }
