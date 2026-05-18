@@ -318,7 +318,7 @@ public class UserRepository
     public async Task<List<WorkScheduleException>> GetUpcomingExceptionsAsync(
         long userId, CancellationToken ct)
     {
-        var today = DateTime.UtcNow.Date;
+        var today = DateTime.SpecifyKind(DateTime.UtcNow.Date, DateTimeKind.Utc);
         return await _db.WorkScheduleExceptions
             .Where(x => x.UserId == userId && x.Date >= today && x.Date <= today.AddDays(60))
             .OrderBy(x => x.Date)
@@ -332,7 +332,7 @@ public class UserRepository
         long userId, DateTime date, bool isWorking, int fromMinutes, int toMinutes, string? note,
         CancellationToken ct)
     {
-        date = date.Date; // отрезаем время
+        date = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc); // отрезаем время и фиксируем как UTC
 
         var existing = await _db.WorkScheduleExceptions
             .FirstOrDefaultAsync(x => x.UserId == userId && x.Date == date, ct);
