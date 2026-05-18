@@ -127,12 +127,13 @@ public class MasterBotUpdateHandler
             $"\nЧто вы хотите сделать?";
 
         var keyboard = new InlineKeyboardMarkup(new[]
-        {
-            new[] { InlineKeyboardButton.WithCallbackData("📋 Услуги и цены", "client_services") },
-            new[] { InlineKeyboardButton.WithCallbackData("🖼 Портфолио", "client_portfolio") },
-            new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
-            new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О мастере", "client_about") },
-        });
+{
+    new[] { InlineKeyboardButton.WithCallbackData("📋 Услуги и цены", "client_services") },
+    new[] { InlineKeyboardButton.WithCallbackData("🖼 Портфолио", "client_portfolio") },
+    new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
+    new[] { InlineKeyboardButton.WithCallbackData("📒 Мои записи", "client_my_bookings") },
+    new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О мастере", "client_about") },
+});
 
         await bot.SendMessage(message.Chat.Id, greeting,
             replyMarkup: keyboard, cancellationToken: ct);
@@ -202,6 +203,12 @@ public class MasterBotUpdateHandler
             return;
         }
 
+        if (data.StartsWith("client_cancel_booking:"))
+        {
+            await HandleClientCancelBookingAsync(ctx, bot, callback, ct);
+            return;
+        }
+
         switch (data)
         {
             case "client_services":
@@ -224,6 +231,9 @@ public class MasterBotUpdateHandler
                 await SendClientMenuAsync(bot, chatId, master, ct);
                 break;
 
+            case "client_my_bookings":
+                await SendClientBookingsAsync(ctx, bot, chatId, callback.From.Id, users, ct);
+                break;
 
             default:
                 await bot.SendMessage(chatId, "Команда не распознана.",
@@ -838,5 +848,143 @@ public class MasterBotUpdateHandler
         DayOfWeek.Saturday => "сб",
         DayOfWeek.Sunday => "вс",
         _ => "?"
+    };
+
+    private async Task SendClientBookingsAsync(
+    MasterBotContext ctx, ITelegramBotClient bot, long chatId, long clientTelegramId,
+    UserRepository users, CancellationToken ct)
+    {
+        var bookings = await users.GetClientBookingsAsync(clientTelegramId, ctx.UserId, ct);
+
+        if (bookings.Count == 0)
+        {
+            await bot.SendMessage(chatId,
+                "📒 Мои записи\n\nУ вас пока нет активных записей.",
+                replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+                new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
+                new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
+                }),
+                cancellationToken: ct);
+            return;
+        }
+
+        var text = "📒 Ваши активные записи:\n\n" +
+            string.Join("\n\n", bookings.Select(b =>
+                $"📅 {b.StartsAt:dddd, dd MMMM} в {b.StartsAt:HH:mm}\n" +
+                $"💼 {b.Service.Name} ({b.DurationMinutes} мин, {b.PriceRub} руб.)\n" +
+                $"📌 Статус: {GetBookingStatusEmoji(b.Status)} {GetBookingStatusName(b.Status)}"));
+
+        text += "\n\nНажмите на запись ниже, чтобы отменить.";
+
+        var buttons = new List<InlineKeyboardButton[]>();
+        foreach (var b in bookings.Take(10))
+        {
+            buttons.Add(new[] {
+            InlineKeyboardButton.WithCallbackData(
+                $"❌ Отменить {b.StartsAt:dd.MM HH:mm}",
+                $"client_cancel_booking:{b.Id}")
+        });
+        }
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleClientCancelBookingAsync(
+        MasterBotContext ctx, ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("client_cancel_booking:", ""), out var bookingId))
+            return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.ClientTelegramId != callback.From.Id || booking.UserId != ctx.UserId)
+        {
+            await bot.SendMessage(chatId, "Запись не найдена.", cancellationToken: ct);
+            return;
+        }
+
+        var ok = await users.CancelBookingAsync(bookingId, "client", null, ct);
+        if (!ok)
+        {
+            await bot.SendMessage(chatId, "Не удалось отменить.", cancellationToken: ct);
+            return;
+        }
+
+        await bot.SendMessage(chatId,
+            $"✅ Запись отменена:\n📅 {booking.StartsAt:dd.MM в HH:mm}\n💼 {booking.Service.Name}",
+            replyMarkup: new InlineKeyboardMarkup(new[]
+            {
+            new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
+            }),
+            cancellationToken: ct);
+
+        _logger.LogInformation(
+            "Клиент отменил запись id={BookingId}, master={MasterId}, client={ClientTgId}",
+            booking.Id, ctx.UserId, callback.From.Id);
+
+        // Уведомляем мастера
+        await NotifyMasterAboutCancellationAsync(scope, ctx.UserId, booking, "client", ct);
+    }
+
+    private async Task NotifyMasterAboutCancellationAsync(
+        IServiceScope scope, long masterUserId,
+        Domain.Entities.Booking booking, string cancelledBy, CancellationToken ct)
+    {
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var master = await users.GetByIdAsync(masterUserId, ct);
+        if (master is null) return;
+
+        var clientName = !string.IsNullOrEmpty(booking.ClientFirstName)
+            ? booking.ClientFirstName
+            : "Клиент";
+        var clientLink = !string.IsNullOrEmpty(booking.ClientUsername)
+            ? $"@{booking.ClientUsername}"
+            : $"<a href=\"tg://user?id={booking.ClientTelegramId}\">профиль</a>";
+
+        var text = "❌ Запись отменена клиентом\n\n" +
+                   $"👤 Клиент: {clientName} ({clientLink})\n" +
+                   $"📅 {booking.StartsAt:dddd, dd MMMM} в {booking.StartsAt:HH:mm}\n" +
+                   $"💼 {booking.Service.Name}";
+
+        try
+        {
+            var mainBot = scope.ServiceProvider.GetRequiredService<ITelegramBotClient>();
+            await mainBot.SendMessage(master.TelegramId, text,
+                parseMode: ParseMode.Html, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Не удалось уведомить мастера об отмене");
+        }
+    }
+
+    private static string GetBookingStatusEmoji(string status) => status switch
+    {
+        "pending" => "⏳",
+        "confirmed" => "✅",
+        "completed" => "✔️",
+        "cancelled_by_client" => "❌",
+        "cancelled_by_master" => "🚫",
+        _ => "•"
+    };
+
+    private static string GetBookingStatusName(string status) => status switch
+    {
+        "pending" => "ожидание",
+        "confirmed" => "подтверждена",
+        "completed" => "завершена",
+        "cancelled_by_client" => "отменена клиентом",
+        "cancelled_by_master" => "отменена мастером",
+        _ => status
     };
 }

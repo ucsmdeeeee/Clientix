@@ -450,4 +450,61 @@ public class UserRepository
 
         await _db.SaveChangesAsync(ct);
     }
+
+    /// <summary>
+    /// Список активных и будущих записей мастера.
+    /// </summary>
+    public async Task<List<Booking>> GetMasterBookingsAsync(
+        long masterUserId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return await _db.Bookings
+            .Include(b => b.Service)
+            .Where(b => b.UserId == masterUserId
+                     && b.EndsAt >= now
+                     && (b.Status == "pending" || b.Status == "confirmed"))
+            .OrderBy(b => b.StartsAt)
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Список активных и будущих записей клиента у конкретного мастера.
+    /// </summary>
+    public async Task<List<Booking>> GetClientBookingsAsync(
+        long clientTelegramId, long masterUserId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return await _db.Bookings
+            .Include(b => b.Service)
+            .Where(b => b.ClientTelegramId == clientTelegramId
+                     && b.UserId == masterUserId
+                     && b.EndsAt >= now
+                     && (b.Status == "pending" || b.Status == "confirmed"))
+            .OrderBy(b => b.StartsAt)
+            .ToListAsync(ct);
+    }
+
+    public async Task<Booking?> GetBookingByIdAsync(long bookingId, CancellationToken ct)
+    {
+        return await _db.Bookings
+            .Include(b => b.Service)
+            .Include(b => b.User)
+            .FirstOrDefaultAsync(b => b.Id == bookingId, ct);
+    }
+
+    public async Task<bool> CancelBookingAsync(
+        long bookingId, string cancelledBy, string? reason, CancellationToken ct)
+    {
+        var booking = await _db.Bookings
+            .FirstOrDefaultAsync(b => b.Id == bookingId, ct);
+        if (booking is null) return false;
+
+        booking.Status = cancelledBy == "client" ? "cancelled_by_client" : "cancelled_by_master";
+        booking.CancelledBy = cancelledBy;
+        booking.CancellationReason = reason;
+        booking.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
 }
