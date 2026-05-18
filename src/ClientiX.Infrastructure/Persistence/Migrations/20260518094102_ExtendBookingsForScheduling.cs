@@ -76,7 +76,7 @@ namespace ClientiX.Infrastructure.Persistence.Migrations
                 table: "bookings",
                 columns: new[] { "UserId", "StartsAt" },
                 unique: true,
-                filter: "status IN ('pending', 'confirmed')");
+                filter: "\"Status\" IN ('pending', 'confirmed')");
 
             migrationBuilder.CreateIndex(
                 name: "IX_bookings_ClientTelegramId_StartsAt",
