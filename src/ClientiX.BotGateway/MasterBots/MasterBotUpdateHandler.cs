@@ -537,10 +537,10 @@ public class MasterBotUpdateHandler
         state.Data["service_name"] = service.Name;
         await _states.SetAsync(clientTgId, state);
 
-        // На 14 дней вперёд найдём дни с свободными слотами
         var days = await slots.GetDaysWithAvailabilityAsync(
-            ctx.UserId, service.DurationMinutes, 14, DateTime.UtcNow,
-            master?.TimeZone ?? "Europe/Moscow", ct);
+            ctx.UserId, service.DurationMinutes,
+            master?.BookingHorizonDays ?? 14,
+            DateTime.UtcNow, masterTz, ct);
 
         var freeDays = days.Where(d => d.HasFreeSlot).ToList();
         if (freeDays.Count == 0)

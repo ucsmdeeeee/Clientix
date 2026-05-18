@@ -40,6 +40,7 @@ public class ClientiXDbContext : DbContext
                 .HasMaxLength(64)
                 .HasDefaultValue("Europe/Moscow")
                 .IsRequired();
+            b.Property(x => x.BookingHorizonDays).HasDefaultValue(14).IsRequired();
         });
 
         // --- ManagedBot ---

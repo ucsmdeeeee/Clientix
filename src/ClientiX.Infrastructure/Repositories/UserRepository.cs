@@ -517,4 +517,14 @@ public class UserRepository
         user.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
     }
+
+    public async Task UpdateBookingHorizonAsync(long telegramId, int days, CancellationToken ct)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.TelegramId == telegramId, ct);
+        if (user is null) return;
+
+        user.BookingHorizonDays = days;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
 }

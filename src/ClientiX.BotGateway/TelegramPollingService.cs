@@ -253,6 +253,12 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        if (data.StartsWith("horizon_set:"))
+        {
+            await HandleHorizonSetAsync(bot, callback, ct);
+            return;
+        }
+
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
         switch (data)
@@ -330,6 +336,10 @@ public class TelegramPollingService : BackgroundService
 
             case "timezone_change":
                 await SendTimezonePickerAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "horizon":
+                await SendHorizonPickerAsync(bot, chatId, telegramId, ct);
                 break;
 
             default:
@@ -636,6 +646,7 @@ public class TelegramPollingService : BackgroundService
     new[] { InlineKeyboardButton.WithCallbackData("📋 Мои услуги", "services") },
     new[] { InlineKeyboardButton.WithCallbackData("🖼 Моё портфолио", "portfolio") },
     new[] { InlineKeyboardButton.WithCallbackData("📅 Моё расписание", "schedule") },
+    new[] { InlineKeyboardButton.WithCallbackData("⏰ Горизонт записи", "horizon") },
     new[] { InlineKeyboardButton.WithCallbackData("💎 Моя подписка", "subscription_info") },
     new[] { InlineKeyboardButton.WithCallbackData("🤝 Пригласить мастера", "referral") },
     new[] { InlineKeyboardButton.WithCallbackData("🌍 Часовой пояс", "timezone_change") },
@@ -1938,4 +1949,53 @@ public class TelegramPollingService : BackgroundService
     private static string GetTimezoneLabel(string id) =>
         ClientiX.Infrastructure.TimeZones.RussianZones
             .FirstOrDefault(z => z.Id == id).Label ?? id;
+
+    private async Task SendHorizonPickerAsync(
+    ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var current = user.BookingHorizonDays;
+        var text = "⏰ Горизонт записи\n\n" +
+                   $"Сейчас: <b>{current} дней</b>\n\n" +
+                   "На сколько дней вперёд клиент может видеть свободные слоты и записываться?\n\n" +
+                   "▪️ 7 дней — для активной практики (близкая запись)\n" +
+                   "▪️ 14 дней — стандарт индустрии\n" +
+                   "▪️ 30 дней — для постоянных клиентов с планированием\n" +
+                   "▪️ 60 дней — для услуг с долгим циклом";
+
+        int[] options = { 7, 14, 30, 60 };
+        var buttons = options.Select(d => new[] {
+        InlineKeyboardButton.WithCallbackData(
+            d == current ? $"✅ {d} дней" : $"{d} дней",
+            $"horizon_set:{d}")
+    }).ToList();
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet") });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleHorizonSetAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+        if (!int.TryParse(callback.Data!.Replace("horizon_set:", ""), out var days)) return;
+        if (days != 7 && days != 14 && days != 30 && days != 60) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        await users.UpdateBookingHorizonAsync(callback.From.Id, days, ct);
+
+        var chatId = callback.Message!.Chat.Id;
+        await bot.SendMessage(chatId,
+            $"✅ Горизонт записи обновлён: {days} дней",
+            cancellationToken: ct);
+        await SendHorizonPickerAsync(bot, chatId, callback.From.Id, ct);
+    }
 }

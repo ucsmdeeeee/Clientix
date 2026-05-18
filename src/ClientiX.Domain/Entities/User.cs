@@ -31,4 +31,9 @@ public class User
     /// Используется для всех операций со временем (расписание, брони, отображение).
     /// </summary>
     public string TimeZone { get; set; } = "Europe/Moscow";
+
+    /// <summary>
+    /// На сколько дней вперёд клиент может записываться. 7, 14, 30, 60. По умолчанию 14.
+    /// </summary>
+    public int BookingHorizonDays { get; set; } = 14;
 }
