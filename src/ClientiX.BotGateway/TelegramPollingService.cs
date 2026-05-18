@@ -190,6 +190,24 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        if (data.StartsWith("sched_day:"))
+        {
+            await HandleScheduleDayClickAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("sched_set:"))
+        {
+            await HandleScheduleSetAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("excpt_del:"))
+        {
+            await HandleExceptionDeleteAsync(bot, callback, ct);
+            return;
+        }
+
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
         switch (data)
@@ -239,6 +257,18 @@ public class TelegramPollingService : BackgroundService
             case "buy_90":
             case "buy_180":
                 await StartPaymentAsync(bot, chatId, telegramId, data, ct);
+                break;
+
+            case "schedule":
+                await SendScheduleAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "schedule_exceptions":
+                await SendExceptionsListAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "schedule_exception_add":
+                await StartAddExceptionFsmAsync(bot, chatId, telegramId, ct);
                 break;
 
             default:
@@ -318,6 +348,18 @@ public class TelegramPollingService : BackgroundService
                 break;
             case "connect_bot_token":
                 await HandleBotTokenAsync(bot, message, state, ct);
+                break;
+            case "sched_hours":
+                await HandleScheduleHoursInputAsync(bot, message, state, ct);
+                break;
+            case "excpt_date":
+                await HandleExceptionDateAsync(bot, message, state, ct);
+                break;
+            case "excpt_hours":
+                await HandleExceptionHoursAsync(bot, message, state, ct);
+                break;
+            case "excpt_note":
+                await HandleExceptionNoteAsync(bot, message, state, ct);
                 break;
             default:
                 await bot.SendMessage(message.Chat.Id,
@@ -525,12 +567,13 @@ public class TelegramPollingService : BackgroundService
             $"🤝 Реферальный код: {user.ReferralCode}";
 
         var keyboard = new InlineKeyboardMarkup(new[]
-        {
-        new[] { InlineKeyboardButton.WithCallbackData("📋 Мои услуги", "services") },
-        new[] { InlineKeyboardButton.WithCallbackData("💎 Моя подписка", "subscription_info") },
-        new[] { InlineKeyboardButton.WithCallbackData("🤝 Пригласить мастера", "referral") },
-        new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") },
-    });
+{
+    new[] { InlineKeyboardButton.WithCallbackData("📋 Мои услуги", "services") },
+    new[] { InlineKeyboardButton.WithCallbackData("📅 Моё расписание", "schedule") },
+    new[] { InlineKeyboardButton.WithCallbackData("💎 Моя подписка", "subscription_info") },
+    new[] { InlineKeyboardButton.WithCallbackData("🤝 Пригласить мастера", "referral") },
+    new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") },
+});
 
         await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
     }
@@ -1019,5 +1062,420 @@ public class TelegramPollingService : BackgroundService
             $"После успешной оплаты подписка будет активирована автоматически.",
             replyMarkup: keyboard,
             cancellationToken: ct);
+    }
+
+    // ============================================================
+    // РАСПИСАНИЕ МАСТЕРА
+    // ============================================================
+
+    private static readonly string[] DayNames =
+        { "Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота" };
+
+    private static readonly string[] DayNamesShort =
+        { "Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб" };
+
+    private async Task SendScheduleAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var schedule = await users.GetWeeklyScheduleAsync(user.Id, ct);
+        var exceptions = await users.GetUpcomingExceptionsAsync(user.Id, ct);
+
+        // Сортировка по дням, начиная с понедельника
+        var dayOrder = new[] { 1, 2, 3, 4, 5, 6, 0 };
+        var ordered = dayOrder.Select(d => schedule.First(s => s.DayOfWeek == d)).ToList();
+
+        var text = "📅 Моё расписание (шаблон недели)\n\n" +
+            string.Join("\n", ordered.Select(s =>
+                s.IsWorking
+                    ? $"✅ {DayNames[s.DayOfWeek]}: {FormatTime(s.FromMinutes)}–{FormatTime(s.ToMinutes)}"
+                    : $"⛔ {DayNames[s.DayOfWeek]}: выходной"));
+
+        if (exceptions.Any())
+        {
+            text += $"\n\n📌 Ближайшие исключения: {exceptions.Count}";
+        }
+
+        text += "\n\nНажмите на день, чтобы изменить.";
+
+        var buttons = new List<InlineKeyboardButton[]>();
+        foreach (var s in ordered)
+        {
+            var emoji = s.IsWorking ? "✅" : "⛔";
+            var hours = s.IsWorking ? $" {FormatTime(s.FromMinutes)}–{FormatTime(s.ToMinutes)}" : " (вых.)";
+            buttons.Add(new[] {
+            InlineKeyboardButton.WithCallbackData(
+                $"{emoji} {DayNames[s.DayOfWeek]}{hours}",
+                $"sched_day:{s.DayOfWeek}")
+        });
+        }
+        buttons.Add(new[] {
+        InlineKeyboardButton.WithCallbackData("📌 Исключения на даты", "schedule_exceptions")
+    });
+        buttons.Add(new[] {
+        InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet")
+    });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleScheduleDayClickAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!int.TryParse(callback.Data!.Replace("sched_day:", ""), out var dayOfWeek)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var schedule = await users.GetWeeklyScheduleAsync(user.Id, ct);
+        var day = schedule.First(s => s.DayOfWeek == dayOfWeek);
+
+        var text = $"📅 {DayNames[dayOfWeek]}\n\n" +
+            (day.IsWorking
+                ? $"Сейчас: ✅ рабочий, {FormatTime(day.FromMinutes)}–{FormatTime(day.ToMinutes)}"
+                : "Сейчас: ⛔ выходной");
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] {
+            InlineKeyboardButton.WithCallbackData("✅ Сделать рабочим", $"sched_set:{dayOfWeek}:work"),
+            InlineKeyboardButton.WithCallbackData("⛔ Сделать выходным", $"sched_set:{dayOfWeek}:off")
+        },
+        new[] {
+            InlineKeyboardButton.WithCallbackData("🕐 Изменить часы", $"sched_set:{dayOfWeek}:hours")
+        },
+        new[] { InlineKeyboardButton.WithCallbackData("« К расписанию", "schedule") }
+    });
+
+        await bot.SendMessage(callback.Message!.Chat.Id, text,
+            replyMarkup: keyboard, cancellationToken: ct);
+    }
+
+    private async Task HandleScheduleSetAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var parts = callback.Data!.Replace("sched_set:", "").Split(':');
+        if (parts.Length != 2 || !int.TryParse(parts[0], out var dayOfWeek)) return;
+
+        var action = parts[1];
+        var chatId = callback.Message!.Chat.Id;
+        var telegramId = callback.From.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var schedule = await users.GetWeeklyScheduleAsync(user.Id, ct);
+        var day = schedule.First(s => s.DayOfWeek == dayOfWeek);
+
+        if (action == "work")
+        {
+            // Если выходные часы 0-0 — дефолт 10:00–20:00
+            int from = day.FromMinutes > 0 ? day.FromMinutes : 600;
+            int to = day.ToMinutes > 0 ? day.ToMinutes : 1200;
+            await users.SetWeeklyDayAsync(user.Id, dayOfWeek, true, from, to, ct);
+            await bot.SendMessage(chatId,
+                $"✅ {DayNames[dayOfWeek]}: рабочий, {FormatTime(from)}–{FormatTime(to)}",
+                cancellationToken: ct);
+            await SendScheduleAsync(bot, chatId, telegramId, ct);
+        }
+        else if (action == "off")
+        {
+            await users.SetWeeklyDayAsync(user.Id, dayOfWeek, false, 0, 0, ct);
+            await bot.SendMessage(chatId, $"⛔ {DayNames[dayOfWeek]}: выходной",
+                cancellationToken: ct);
+            await SendScheduleAsync(bot, chatId, telegramId, ct);
+        }
+        else if (action == "hours")
+        {
+            var state = new UserState
+            {
+                CurrentStep = "sched_hours",
+                Data = { ["dayOfWeek"] = dayOfWeek.ToString() }
+            };
+            await _states.SetAsync(telegramId, state);
+
+            await bot.SendMessage(chatId,
+                $"🕐 Введите часы работы на {DayNames[dayOfWeek]} в формате\n" +
+                "<code>ЧЧ:ММ-ЧЧ:ММ</code>\n\nНапример: <code>10:00-20:00</code>",
+                parseMode: ParseMode.Html,
+                cancellationToken: ct);
+        }
+    }
+
+    private async Task HandleScheduleHoursInputAsync(
+        ITelegramBotClient bot, Message message, UserState state, CancellationToken ct)
+    {
+        var input = (message.Text ?? "").Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(
+            input, @"^(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})$");
+
+        if (!match.Success)
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Неверный формат. Введите как: 10:00-20:00", cancellationToken: ct);
+            return;
+        }
+
+        int fromH = int.Parse(match.Groups[1].Value);
+        int fromM = int.Parse(match.Groups[2].Value);
+        int toH = int.Parse(match.Groups[3].Value);
+        int toM = int.Parse(match.Groups[4].Value);
+
+        if (fromH < 0 || fromH > 23 || fromM < 0 || fromM > 59 ||
+            toH < 0 || toH > 23 || toM < 0 || toM > 59)
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Время вне диапазона. Часы 0–23, минуты 0–59.", cancellationToken: ct);
+            return;
+        }
+
+        int from = fromH * 60 + fromM;
+        int to = toH * 60 + toM;
+        if (to <= from)
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Время окончания должно быть позже начала.", cancellationToken: ct);
+            return;
+        }
+
+        if (!int.TryParse(state.Data.GetValueOrDefault("dayOfWeek", "1"), out var dayOfWeek)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(message.From!.Id, ct);
+        if (user is null) return;
+
+        await users.SetWeeklyDayAsync(user.Id, dayOfWeek, true, from, to, ct);
+        await _states.ClearAsync(message.From.Id);
+
+        await bot.SendMessage(message.Chat.Id,
+            $"✅ Часы обновлены: {DayNames[dayOfWeek]}, {FormatTime(from)}–{FormatTime(to)}",
+            cancellationToken: ct);
+
+        await SendScheduleAsync(bot, message.Chat.Id, message.From.Id, ct);
+    }
+
+    private async Task SendExceptionsListAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var exceptions = await users.GetUpcomingExceptionsAsync(user.Id, ct);
+
+        string text;
+        if (exceptions.Count == 0)
+        {
+            text = "📌 Исключения в расписании\n\n" +
+                   "Пока ни одного исключения не задано.\n\n" +
+                   "Используйте исключения, чтобы:\n" +
+                   "▪️ закрыть рабочий день в отпуск или болезнь\n" +
+                   "▪️ открыть выходной для дополнительного приёма\n" +
+                   "▪️ изменить часы на конкретную дату";
+        }
+        else
+        {
+            text = "📌 Ближайшие исключения:\n\n" +
+                string.Join("\n", exceptions.Select(e =>
+                {
+                    var note = string.IsNullOrEmpty(e.Note) ? "" : $" — {e.Note}";
+                    return e.IsWorking
+                        ? $"✅ {e.Date:dd.MM.yyyy}: {FormatTime(e.FromMinutes)}–{FormatTime(e.ToMinutes)}{note}"
+                        : $"⛔ {e.Date:dd.MM.yyyy}: не работаю{note}";
+                }));
+        }
+
+        var buttons = new List<InlineKeyboardButton[]>
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("➕ Добавить исключение", "schedule_exception_add") }
+    };
+
+        foreach (var e in exceptions.Take(10))
+        {
+            buttons.Add(new[] {
+            InlineKeyboardButton.WithCallbackData(
+                $"🗑 {e.Date:dd.MM}", $"excpt_del:{e.Id}")
+        });
+        }
+
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« К расписанию", "schedule") });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleExceptionDeleteAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("excpt_del:", ""), out var id)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var ok = await users.DeleteExceptionAsync(user.Id, id, ct);
+        var chatId = callback.Message!.Chat.Id;
+
+        await bot.SendMessage(chatId,
+            ok ? "🗑 Исключение удалено." : "Не удалось удалить.",
+            cancellationToken: ct);
+
+        await SendExceptionsListAsync(bot, chatId, callback.From.Id, ct);
+    }
+
+    private async Task StartAddExceptionFsmAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        var state = new UserState { CurrentStep = "excpt_date" };
+        await _states.SetAsync(telegramId, state);
+
+        await bot.SendMessage(chatId,
+            "📌 Добавление исключения\n\n" +
+            "Шаг 1 из 3: на какую дату?\n" +
+            "Введите в формате ДД.ММ.ГГГГ (например: 28.12.2026)",
+            cancellationToken: ct);
+    }
+
+    private async Task HandleExceptionDateAsync(
+        ITelegramBotClient bot, Message message, UserState state, CancellationToken ct)
+    {
+        var input = (message.Text ?? "").Trim();
+        if (!DateTime.TryParseExact(input, "dd.MM.yyyy", null,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var date))
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Не понял дату. Формат: ДД.ММ.ГГГГ, например 28.12.2026",
+                cancellationToken: ct);
+            return;
+        }
+
+        if (date.Date < DateTime.UtcNow.Date)
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "Дата уже прошла. Введите будущую.",
+                cancellationToken: ct);
+            return;
+        }
+
+        state.Data["date"] = date.Date.ToString("O");
+        state.CurrentStep = "excpt_hours";
+        await _states.SetAsync(message.From!.Id, state);
+
+        await bot.SendMessage(message.Chat.Id,
+            "Шаг 2 из 3: часы.\n\n" +
+            "▪️ Введите <code>выходной</code> — закрыть день\n" +
+            "▪️ Или часы в формате <code>10:00-20:00</code> — особые часы на эту дату",
+            parseMode: ParseMode.Html,
+            cancellationToken: ct);
+    }
+
+    private async Task HandleExceptionHoursAsync(
+        ITelegramBotClient bot, Message message, UserState state, CancellationToken ct)
+    {
+        var input = (message.Text ?? "").Trim().ToLower();
+
+        bool isWorking;
+        int from = 0, to = 0;
+
+        if (input == "выходной" || input == "off" || input == "не работаю")
+        {
+            isWorking = false;
+        }
+        else
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                input, @"^(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})$");
+            if (!match.Success)
+            {
+                await bot.SendMessage(message.Chat.Id,
+                    "Не понял. Напишите «выходной» или часы вида 10:00-20:00",
+                    cancellationToken: ct);
+                return;
+            }
+
+            from = int.Parse(match.Groups[1].Value) * 60 + int.Parse(match.Groups[2].Value);
+            to = int.Parse(match.Groups[3].Value) * 60 + int.Parse(match.Groups[4].Value);
+
+            if (from < 0 || from > 1439 || to < 0 || to > 1439 || to <= from)
+            {
+                await bot.SendMessage(message.Chat.Id,
+                    "Время некорректно. Часы 0–23, минуты 0–59, конец позже начала.",
+                    cancellationToken: ct);
+                return;
+            }
+            isWorking = true;
+        }
+
+        state.Data["isWorking"] = isWorking.ToString();
+        state.Data["from"] = from.ToString();
+        state.Data["to"] = to.ToString();
+        state.CurrentStep = "excpt_note";
+        await _states.SetAsync(message.From!.Id, state);
+
+        await bot.SendMessage(message.Chat.Id,
+            "Шаг 3 из 3: комментарий (необязательно).\n\n" +
+            "Например: «отпуск», «болезнь», «доп. приём».\n" +
+            "Или отправьте «-» чтобы пропустить.",
+            cancellationToken: ct);
+    }
+
+    private async Task HandleExceptionNoteAsync(
+        ITelegramBotClient bot, Message message, UserState state, CancellationToken ct)
+    {
+        var note = (message.Text ?? "").Trim();
+        if (note == "-" || note.ToLower() == "пропустить") note = "";
+
+        if (!DateTime.TryParse(state.Data["date"], null,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var date)) return;
+        if (!bool.TryParse(state.Data["isWorking"], out var isWorking)) return;
+        if (!int.TryParse(state.Data["from"], out var from)) return;
+        if (!int.TryParse(state.Data["to"], out var to)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(message.From!.Id, ct);
+        if (user is null) return;
+
+        await users.UpsertExceptionAsync(
+            user.Id, date, isWorking, from, to,
+            string.IsNullOrEmpty(note) ? null : note, ct);
+
+        await _states.ClearAsync(message.From.Id);
+
+        var summary = isWorking
+            ? $"{date:dd.MM.yyyy}: {FormatTime(from)}–{FormatTime(to)}"
+            : $"{date:dd.MM.yyyy}: выходной";
+        if (!string.IsNullOrEmpty(note)) summary += $" ({note})";
+
+        await bot.SendMessage(message.Chat.Id,
+            $"✅ Исключение добавлено!\n\n📌 {summary}",
+            cancellationToken: ct);
+
+        await SendExceptionsListAsync(bot, message.Chat.Id, message.From.Id, ct);
+    }
+
+    private static string FormatTime(int minutes)
+    {
+        return $"{minutes / 60:00}:{minutes % 60:00}";
     }
 }
