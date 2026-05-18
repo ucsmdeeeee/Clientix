@@ -1820,6 +1820,9 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        var allServices = await users.GetServicesAsync(user.Id, ct);
+        var masterTz = user.TimeZone;
+
         var text = $"📒 Активные записи: {bookings.Count}\n\n" +
             string.Join("\n\n", bookings.Select(b =>
             {
@@ -1829,9 +1832,12 @@ public class TelegramPollingService : BackgroundService
                 var clientUsername = !string.IsNullOrEmpty(b.ClientUsername)
                     ? $" (@{b.ClientUsername})"
                     : "";
+                var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.StartsAt, masterTz);
+                var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.EndsAt, masterTz);
+                var servicesList = FormatBookingServicesList(b, allServices);
                 return
-                    $"📅 {b.StartsAt:dd.MM} в {b.StartsAt:HH:mm}–{b.EndsAt:HH:mm}\n" +
-                    $"💼 {b.Service.Name}, {b.PriceRub} руб.\n" +
+                    $"📅 {startLocal:dd.MM} в {startLocal:HH:mm}–{endLocal:HH:mm}\n" +
+                    $"💼 {servicesList}, {b.PriceRub} руб.\n" +
                     $"👤 {clientName}{clientUsername}";
             }));
 
@@ -2414,5 +2420,25 @@ public class TelegramPollingService : BackgroundService
         return await db.WorkScheduleExceptions
             .Where(x => x.UserId == userId && x.Date >= startUtc && x.Date < endUtc)
             .ToListAsync(ct);
+    }
+
+    private static string FormatBookingServicesList(
+    Domain.Entities.Booking booking,
+    List<Domain.Entities.Service> allMasterServices)
+    {
+        var names = new List<string> { booking.Service.Name };
+
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            var ids = booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var idStr in ids)
+            {
+                if (!long.TryParse(idStr, out var svcId)) continue;
+                var svc = allMasterServices.FirstOrDefault(s => s.Id == svcId);
+                if (svc is not null) names.Add(svc.Name);
+            }
+        }
+
+        return string.Join(" + ", names);
     }
 }

@@ -848,11 +848,14 @@ public class MasterBotUpdateHandler
             ? $"@{booking.ClientUsername}"
             : $"<a href=\"tg://user?id={booking.ClientTelegramId}\">профиль</a>";
 
+        var allServices = await users.GetServicesAsync(masterUserId, ct);
+        var servicesList = FormatBookingServicesList(booking, allServices);
+
         var text = "🔔 Новая запись!\n\n" +
                    $"👤 Клиент: {clientName} ({clientLink})\n" +
                    $"📅 Дата: {booking.StartsAt:dddd, dd MMMM yyyy}\n" +
                    $"🕐 Время: {booking.StartsAt:HH:mm} – {booking.EndsAt:HH:mm}\n" +
-                   $"💼 Услуга: {serviceName}\n" +
+                   $"💼 Услуга: {servicesList}\n" +
                    $"💰 Стоимость: {booking.PriceRub} руб.";
 
         try
@@ -917,11 +920,18 @@ public class MasterBotUpdateHandler
             return;
         }
 
+        var allServices = await users.GetServicesAsync(ctx.UserId, ct);
+
         var text = "📒 Ваши активные записи:\n\n" +
             string.Join("\n\n", bookings.Select(b =>
-                $"📅 {b.StartsAt:dddd, dd MMMM} в {b.StartsAt:HH:mm}\n" +
-                $"💼 {b.Service.Name} ({b.DurationMinutes} мин, {b.PriceRub} руб.)\n" +
-                $"📌 Статус: {GetBookingStatusEmoji(b.Status)} {GetBookingStatusName(b.Status)}"));
+            {
+                var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.StartsAt, masterTz);
+                var servicesList = FormatBookingServicesList(b, allServices);
+                return
+                    $"📅 {startLocal:dddd, dd MMMM} в {startLocal:HH:mm}\n" +
+                    $"💼 {servicesList} ({b.DurationMinutes} мин, {b.PriceRub} руб.)\n" +
+                    $"📌 {GetBookingStatusEmoji(b.Status)} {GetBookingStatusName(b.Status)}";
+            }));
 
         text += "\n\nНажмите на запись ниже, чтобы отменить.";
 
@@ -1518,9 +1528,12 @@ public class MasterBotUpdateHandler
             ? $"@{booking.ClientUsername}"
             : $"<a href=\"tg://user?id={booking.ClientTelegramId}\">профиль</a>";
 
+        var allServices = await users.GetServicesAsync(masterUserId, ct);
+        var servicesList = FormatBookingServicesList(booking, allServices);
+
         var text = "🔄 Клиент перенёс запись\n\n" +
                    $"👤 {clientName} ({clientLink})\n" +
-                   $"💼 {booking.Service.Name}\n" +
+                   $"💼 {servicesList}\n" +
                    $"📅 Было: {oldLocal:dd.MM в HH:mm}\n" +
                    $"📅 Стало: <b>{newLocal:dd.MM в HH:mm}</b>";
 
@@ -1715,5 +1728,29 @@ public class MasterBotUpdateHandler
         {
             _logger.LogWarning(ex, "Не удалось уведомить мастера о доп. услуге");
         }
+    }
+
+    /// <summary>
+    /// Возвращает форматированный список услуг записи: основная + дополнительные.
+    /// Например: "Маникюр + Педикюр" или просто "Маникюр".
+    /// </summary>
+    private static string FormatBookingServicesList(
+        Domain.Entities.Booking booking,
+        List<Domain.Entities.Service> allMasterServices)
+    {
+        var names = new List<string> { booking.Service.Name };
+
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            var ids = booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var idStr in ids)
+            {
+                if (!long.TryParse(idStr, out var svcId)) continue;
+                var svc = allMasterServices.FirstOrDefault(s => s.Id == svcId);
+                if (svc is not null) names.Add(svc.Name);
+            }
+        }
+
+        return string.Join(" + ", names);
     }
 }
