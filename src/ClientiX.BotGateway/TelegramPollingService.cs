@@ -1006,15 +1006,16 @@ public class TelegramPollingService : BackgroundService
         // текстом + отдельную кнопку «назад». На проде здесь будет реальный HTTPS-URL от ЮKassa.
         var keyboard = new InlineKeyboardMarkup(new[]
         {
-    new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") }
-});
+            new[] { InlineKeyboardButton.WithUrl("💳 Перейти к оплате", paymentLink) },
+            new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") }
+        });
 
         await bot.SendMessage(chatId,
             $"💳 Оформление подписки\n\n" +
             $"📅 Тариф: {tariff.DurationDays} дней\n" +
             $"💰 Сумма: {amountRub} руб.\n" +
             $"#️⃣ Номер платежа: {payment.Id}\n\n" +
-            $"🔗 Ссылка на оплату:\n{paymentLink}\n\n" +
+            $"Нажмите кнопку ниже, чтобы перейти к оплате. " +
             $"После успешной оплаты подписка будет активирована автоматически.",
             replyMarkup: keyboard,
             cancellationToken: ct);
