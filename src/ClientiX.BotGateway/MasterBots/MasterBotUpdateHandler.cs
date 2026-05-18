@@ -210,6 +210,17 @@ public class MasterBotUpdateHandler
             return;
         }
 
+        if (data.StartsWith("cli_cal_nav:"))
+        {
+            await HandleClientCalendarNavAsync(ctx, bot, callback, ct);
+            return;
+        }
+
+        if (data == "noop")
+        {
+            return; // пустая кнопка
+        }
+
         switch (data)
         {
             case "client_services":
@@ -535,6 +546,7 @@ public class MasterBotUpdateHandler
         state.Data["service_duration"] = service.DurationMinutes.ToString();
         state.Data["service_price"] = service.PriceRub.ToString();
         state.Data["service_name"] = service.Name;
+        state.Data["master_tz"] = masterTz;
         await _states.SetAsync(clientTgId, state);
 
         var days = await slots.GetDaysWithAvailabilityAsync(
@@ -546,35 +558,21 @@ public class MasterBotUpdateHandler
         if (freeDays.Count == 0)
         {
             await bot.SendMessage(chatId,
-                "😔 К сожалению, на ближайшие 14 дней нет свободных слотов под эту услугу.\n\n" +
+                "😔 К сожалению, у мастера нет свободных слотов под эту услугу в ближайшее время.\n\n" +
                 "Попробуйте позже или свяжитесь с мастером напрямую.",
                 replyMarkup: new InlineKeyboardMarkup(new[]
                 {
-                new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
+            new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
                 }),
                 cancellationToken: ct);
             await _states.ClearAsync(clientTgId);
             return;
         }
 
-        var text = $"📅 Запись: {service.Name}\n\n" +
-                   $"Шаг 2 из 3: выберите дату.\n\n" +
-                   $"⏱ {service.DurationMinutes} мин   💰 {service.PriceRub} руб.";
-
-        var buttons = new List<InlineKeyboardButton[]>();
-        foreach (var (date, _) in freeDays)
-        {
-            var dayName = GetRussianDayShort(date.DayOfWeek);
-            var label = $"📆 {date:dd.MM} ({dayName})";
-            buttons.Add(new[] {
-            InlineKeyboardButton.WithCallbackData(label, $"book_date:{date:yyyy-MM-dd}")
-        });
-        }
-        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Отмена", "book_cancel") });
-
-        await bot.SendMessage(chatId, text,
-            replyMarkup: new InlineKeyboardMarkup(buttons),
-            cancellationToken: ct);
+        // Рендерим календарь текущего месяца с раскраской свободных дней
+        var todayLocal = ClientiX.Infrastructure.TimeZones.NowInZone(masterTz).Date;
+        var firstOfMonth = new DateTime(todayLocal.Year, todayLocal.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        await SendClientCalendarAsync(bot, chatId, clientTgId, ctx.UserId, service, masterTz, firstOfMonth, days, ct);
     }
 
     private async Task HandleBookDateChosenAsync(
@@ -998,4 +996,149 @@ public class MasterBotUpdateHandler
         "cancelled_by_master" => "отменена мастером",
         _ => status
     };
+
+    // ============================================================
+    // КАЛЕНДАРЬ ДЛЯ КЛИЕНТА
+    // ============================================================
+
+    private async Task SendClientCalendarAsync(
+        ITelegramBotClient bot, long chatId, long clientTgId,
+        long masterUserId, Domain.Entities.Service service,
+        string masterTz, DateTime firstOfMonth,
+        List<(DateTime Date, bool HasFreeSlot)> availabilityDays,
+        CancellationToken ct)
+    {
+        var todayLocal = ClientiX.Infrastructure.TimeZones.NowInZone(masterTz).Date;
+        int daysInMonth = DateTime.DaysInMonth(firstOfMonth.Year, firstOfMonth.Month);
+        int firstWeekday = ((int)firstOfMonth.DayOfWeek + 6) % 7; // понедельник = 0
+
+        // Превращаем список дат с доступностью в словарь для быстрого поиска
+        var freeMap = availabilityDays.ToDictionary(d => d.Date.Date, d => d.HasFreeSlot);
+
+        var monthName = firstOfMonth.ToString("LLLL yyyy",
+            new System.Globalization.CultureInfo("ru-RU"));
+
+        var text = $"📅 Выберите дату\n\n" +
+                   $"💼 <b>{System.Net.WebUtility.HtmlEncode(service.Name)}</b>\n" +
+                   $"⏱ {service.DurationMinutes} мин · 💰 {service.PriceRub} ₽\n\n" +
+                   $"<b>{char.ToUpper(monthName[0])}{monthName.Substring(1)}</b>\n\n" +
+                   $"🟢 свободно   ⚪ нет окон";
+
+        var buttons = new List<InlineKeyboardButton[]>();
+
+        // Навигация по месяцам (только в пределах горизонта)
+        var prevMonth = firstOfMonth.AddMonths(-1);
+        var nextMonth = firstOfMonth.AddMonths(1);
+
+        var navPrev = prevMonth.Year > todayLocal.Year ||
+                      (prevMonth.Year == todayLocal.Year && prevMonth.Month >= todayLocal.Month)
+            ? InlineKeyboardButton.WithCallbackData("«", $"cli_cal_nav:{prevMonth:yyyy-MM}")
+            : InlineKeyboardButton.WithCallbackData(" ", "noop");
+
+        // Стрелка вперёд показывается, только если в следующем месяце есть хоть один свободный слот
+        bool nextHasSlots = availabilityDays.Any(d =>
+            d.Date.Year == nextMonth.Year && d.Date.Month == nextMonth.Month && d.HasFreeSlot);
+        var navNext = nextHasSlots
+            ? InlineKeyboardButton.WithCallbackData("»", $"cli_cal_nav:{nextMonth:yyyy-MM}")
+            : InlineKeyboardButton.WithCallbackData(" ", "noop");
+
+        buttons.Add(new[]
+        {
+        navPrev,
+        InlineKeyboardButton.WithCallbackData(
+            $"{char.ToUpper(monthName[0])}{monthName.Substring(1)}", "noop"),
+        navNext
+    });
+
+        buttons.Add(new[]
+        {
+        InlineKeyboardButton.WithCallbackData("Пн", "noop"),
+        InlineKeyboardButton.WithCallbackData("Вт", "noop"),
+        InlineKeyboardButton.WithCallbackData("Ср", "noop"),
+        InlineKeyboardButton.WithCallbackData("Чт", "noop"),
+        InlineKeyboardButton.WithCallbackData("Пт", "noop"),
+        InlineKeyboardButton.WithCallbackData("Сб", "noop"),
+        InlineKeyboardButton.WithCallbackData("Вс", "noop"),
+    });
+
+        var row = new List<InlineKeyboardButton>();
+        for (int i = 0; i < firstWeekday; i++)
+            row.Add(InlineKeyboardButton.WithCallbackData(" ", "noop"));
+
+        for (int day = 1; day <= daysInMonth; day++)
+        {
+            var date = new DateTime(firstOfMonth.Year, firstOfMonth.Month, day, 0, 0, 0, DateTimeKind.Unspecified);
+            bool hasFree = freeMap.TryGetValue(date.Date, out var f) && f;
+            bool isPast = date.Date < todayLocal;
+
+            if (isPast || !hasFree)
+            {
+                row.Add(InlineKeyboardButton.WithCallbackData($"⚪{day}", "noop"));
+            }
+            else
+            {
+                row.Add(InlineKeyboardButton.WithCallbackData(
+                    $"🟢{day}",
+                    $"book_date:{date:yyyy-MM-dd}"));
+            }
+
+            if (row.Count == 7)
+            {
+                buttons.Add(row.ToArray());
+                row = new List<InlineKeyboardButton>();
+            }
+        }
+        if (row.Count > 0)
+        {
+            while (row.Count < 7) row.Add(InlineKeyboardButton.WithCallbackData(" ", "noop"));
+            buttons.Add(row.ToArray());
+        }
+
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Отмена", "book_cancel") });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleClientCalendarNavAsync(
+        MasterBotContext ctx, ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var ymStr = callback.Data!.Replace("cli_cal_nav:", "");
+        if (!DateTime.TryParseExact(ymStr + "-01", "yyyy-MM-dd", null,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var newMonth))
+            return;
+
+        var chatId = callback.Message!.Chat.Id;
+        var clientTgId = callback.From.Id;
+
+        var state = await _states.GetAsync(clientTgId);
+        if (state is null || state.CurrentStep != "booking_date") return;
+
+        if (!int.TryParse(state.Data.GetValueOrDefault("service_id", "0"), out var serviceId)) return;
+        if (!int.TryParse(state.Data.GetValueOrDefault("service_duration", "0"), out var duration)) return;
+        var masterTz = state.Data.GetValueOrDefault("master_tz", "Europe/Moscow");
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var slotsService = scope.ServiceProvider
+            .GetRequiredService<ClientiX.Infrastructure.Bookings.BookingSlotService>();
+
+        var services = await users.GetServicesAsync(ctx.UserId, ct);
+        var service = services.FirstOrDefault(s => s.Id == serviceId);
+        if (service is null) return;
+
+        var master = await users.GetByIdAsync(ctx.UserId, ct);
+        var horizon = master?.BookingHorizonDays ?? 14;
+
+        var days = await slotsService.GetDaysWithAvailabilityAsync(
+            ctx.UserId, duration, horizon, DateTime.UtcNow, masterTz, ct);
+
+        var firstOfMonth = new DateTime(newMonth.Year, newMonth.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+
+        await SendClientCalendarAsync(bot, chatId, clientTgId, ctx.UserId, service, masterTz, firstOfMonth, days, ct);
+    }
 }
