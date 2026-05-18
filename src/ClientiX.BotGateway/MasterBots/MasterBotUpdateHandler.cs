@@ -630,9 +630,11 @@ public class MasterBotUpdateHandler
         var row = new List<InlineKeyboardButton>();
         foreach (var slot in availableSlots)
         {
+            var slotLocal = ClientiX.Infrastructure.TimeZones.ToZone(slot, masterTz);
             row.Add(InlineKeyboardButton.WithCallbackData(
-                slot.ToString("HH:mm"),
+                slotLocal.ToString("HH:mm"),
                 $"book_slot:{slot:yyyy-MM-ddTHH:mm}"));
+
             if (row.Count == 3)
             {
                 buttons.Add(row.ToArray());

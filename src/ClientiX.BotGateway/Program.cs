@@ -13,6 +13,11 @@ using ClientiX.BotGateway.MasterBots;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ѕринудительно русска€ культура дл€ форматировани€ дат во всех част€х бота
+var ruCulture = new System.Globalization.CultureInfo("ru-RU");
+System.Globalization.CultureInfo.DefaultThreadCurrentCulture = ruCulture;
+System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = ruCulture;
+
 // Serilog
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
