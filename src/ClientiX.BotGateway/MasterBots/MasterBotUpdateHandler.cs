@@ -1015,13 +1015,14 @@ public class MasterBotUpdateHandler
         // Превращаем список дат с доступностью в словарь для быстрого поиска
         var freeMap = availabilityDays.ToDictionary(d => d.Date.Date, d => d.HasFreeSlot);
 
-        var monthName = firstOfMonth.ToString("LLLL yyyy",
-            new System.Globalization.CultureInfo("ru-RU"));
+        var ruMonths = new[] { "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                       "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь" };
+        var monthName = $"{ruMonths[firstOfMonth.Month - 1]} {firstOfMonth.Year}";
 
         var text = $"📅 Выберите дату\n\n" +
                    $"💼 <b>{System.Net.WebUtility.HtmlEncode(service.Name)}</b>\n" +
                    $"⏱ {service.DurationMinutes} мин · 💰 {service.PriceRub} ₽\n\n" +
-                   $"<b>{char.ToUpper(monthName[0])}{monthName.Substring(1)}</b>\n\n" +
+                   $"<b>{monthName}</b>\n\n" +
                    $"🟢 свободно   ⚪ нет окон";
 
         var buttons = new List<InlineKeyboardButton[]>();
@@ -1046,7 +1047,7 @@ public class MasterBotUpdateHandler
         {
         navPrev,
         InlineKeyboardButton.WithCallbackData(
-            $"{char.ToUpper(monthName[0])}{monthName.Substring(1)}", "noop"),
+            monthName, "noop"),
         navNext
     });
 

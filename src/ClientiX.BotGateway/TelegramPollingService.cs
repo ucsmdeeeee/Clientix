@@ -2057,11 +2057,12 @@ public class TelegramPollingService : BackgroundService
         int daysInMonth = DateTime.DaysInMonth(firstOfMonth.Year, firstOfMonth.Month);
         int firstWeekday = ((int)firstOfMonth.DayOfWeek + 6) % 7; // понедельник = 0
 
-        var monthName = firstOfMonth.ToString("LLLL yyyy",
-            new System.Globalization.CultureInfo("ru-RU"));
+        var ruMonths = new[] { "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                       "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь" };
+        var monthName = $"{ruMonths[firstOfMonth.Month - 1]} {firstOfMonth.Year}";
 
         var text = "📅 Расписание мастера\n\n" +
-                   $"<b>{char.ToUpper(monthName[0])}{monthName.Substring(1)}</b>\n\n" +
+                   $"<b>{monthName}</b>\n\n" +
                    "🟢 рабочий день  🔴 выходной  🟡 особый  ⚪ прошедший";
 
         var buttons = new List<InlineKeyboardButton[]>();
@@ -2072,7 +2073,7 @@ public class TelegramPollingService : BackgroundService
         {
         InlineKeyboardButton.WithCallbackData("«", $"cal_nav:{prevMonth:yyyy-MM}"),
         InlineKeyboardButton.WithCallbackData(
-            $"{char.ToUpper(monthName[0])}{monthName.Substring(1)}", "noop"),
+            monthName, "noop"),
         InlineKeyboardButton.WithCallbackData("»", $"cal_nav:{nextMonth:yyyy-MM}")
     });
 
