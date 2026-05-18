@@ -420,4 +420,15 @@ public class UserRepository
         await _db.SaveChangesAsync(ct);
         return true;
     }
+
+    /// <summary>
+    /// Получает пользователя по внутреннему ID (не telegram_id).
+    /// </summary>
+    public async Task<User?> GetByIdAsync(long userId, CancellationToken ct)
+    {
+        return await _db.Users
+            .Include(u => u.Subscription)
+            .Include(u => u.ManagedBot)
+            .FirstOrDefaultAsync(u => u.Id == userId, ct);
+    }
 }

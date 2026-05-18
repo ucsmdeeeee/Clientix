@@ -9,6 +9,7 @@ using StackExchange.Redis;
 using Telegram.Bot;
 using Microsoft.AspNetCore.DataProtection;
 using ClientiX.BotGateway.Endpoints;
+using ClientiX.BotGateway.MasterBots;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -58,6 +59,11 @@ builder.Services.AddSingleton<TokenProtector>();
 
 // √лавный поллинг-сервис должен быть ѕќ—Ћ≈ƒЌ»ћ Ч он зависит от всего выше
 builder.Services.AddHostedService<TelegramPollingService>();
+
+// ћенеджер ботов мастеров
+builder.Services.AddSingleton<MasterBotUpdateHandler>();
+builder.Services.AddSingleton<MasterBotManager>();
+builder.Services.AddHostedService<MasterBotsHostedService>();
 
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ClientiX.Infrastructure.Payments.YooKassaPaymentService>();

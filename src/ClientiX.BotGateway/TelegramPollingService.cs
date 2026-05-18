@@ -1,4 +1,5 @@
-﻿using ClientiX.Domain.Entities;
+﻿using ClientiX.BotGateway.MasterBots;
+using ClientiX.Domain.Entities;
 using ClientiX.Infrastructure.Repositories;
 using ClientiX.Infrastructure.Security;
 using ClientiX.Infrastructure.State;
@@ -19,19 +20,22 @@ public class TelegramPollingService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly UserStateService _states;
     private readonly TokenProtector _protector;
+    private readonly MasterBotManager _masterBotManager;
 
     public TelegramPollingService(
         ITelegramBotClient bot,
         ILogger<TelegramPollingService> logger,
         IServiceScopeFactory scopeFactory,
         UserStateService states,
-        TokenProtector protector)
+        TokenProtector protector,
+        MasterBotManager masterBotManager)
     {
         _bot = bot;
         _logger = logger;
         _scopeFactory = scopeFactory;
         _states = states;
         _protector = protector;
+        _masterBotManager = masterBotManager;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -990,6 +994,9 @@ public class TelegramPollingService : BackgroundService
         {
             await SendMainMenuAsync(bot, message.Chat.Id, updated, ct);
         }
+
+        await _masterBotManager.StartOneAsync(
+            user.Id, botInfo.Id, botInfo.Username ?? "", encryptedToken);
     }
 
     /// <summary>
