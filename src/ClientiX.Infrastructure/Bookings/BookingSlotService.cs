@@ -82,11 +82,14 @@ public class BookingSlotService
     /// шаблона недели и исключений. null = выходной.
     /// </summary>
     private async Task<(DateTime Start, DateTime End)?> GetWorkWindowAsync(
-        long masterUserId, DateTime date, CancellationToken ct)
+    long masterUserId, DateTime dateLocal, CancellationToken ct)
     {
-        // 1. Проверяем, есть ли исключение на эту дату
+        // dateLocal — полночь в зоне мастера (Unspecified).
+        // В БД исключения хранятся как date (UTC midnight). Для сравнения берём такую же.
+        var dateAsUtc = DateTime.SpecifyKind(dateLocal.Date, DateTimeKind.Utc);
+
         var exception = await _db.WorkScheduleExceptions
-            .FirstOrDefaultAsync(x => x.UserId == masterUserId && x.Date == date, ct);
+            .FirstOrDefaultAsync(x => x.UserId == masterUserId && x.Date == dateAsUtc, ct);
 
         int fromMinutes, toMinutes;
         bool isWorking;
@@ -99,12 +102,11 @@ public class BookingSlotService
         }
         else
         {
-            // 2. Берём из шаблона недели
-            var dayOfWeek = (int)date.DayOfWeek;
+            var dayOfWeek = (int)dateLocal.DayOfWeek;
             var template = await _db.WorkScheduleTemplates
                 .FirstOrDefaultAsync(t => t.UserId == masterUserId && t.DayOfWeek == dayOfWeek, ct);
 
-            if (template is null) return null; // расписание не настроено
+            if (template is null) return null;
 
             isWorking = template.IsWorking;
             fromMinutes = template.FromMinutes;
@@ -113,8 +115,8 @@ public class BookingSlotService
 
         if (!isWorking || toMinutes <= fromMinutes) return null;
 
-        var start = date.AddMinutes(fromMinutes);
-        var end = date.AddMinutes(toMinutes);
+        var start = dateLocal.AddMinutes(fromMinutes);
+        var end = dateLocal.AddMinutes(toMinutes);
 
         return (start, end);
     }
