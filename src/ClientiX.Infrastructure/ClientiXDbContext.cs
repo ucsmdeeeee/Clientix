@@ -129,14 +129,30 @@ public class ClientiXDbContext : DbContext
         modelBuilder.Entity<Booking>(b =>
         {
             b.ToTable("bookings");
-            b.HasIndex(x => new { x.UserId, x.Status });
-            b.HasIndex(x => x.StartsAt);
-            b.Property(x => x.Status).HasMaxLength(16).IsRequired();
-            b.Property(x => x.ClientName).HasMaxLength(128);
-            b.Property(x => x.ClientPhone).HasMaxLength(32);
+
+            b.Property(x => x.Status).HasMaxLength(32).IsRequired();
+            b.Property(x => x.CancelledBy).HasMaxLength(16);
+            b.Property(x => x.CancellationReason).HasMaxLength(256);
+            b.Property(x => x.ClientFirstName).HasMaxLength(64);
+            b.Property(x => x.ClientUsername).HasMaxLength(64);
+
+            // Главный индекс для запросов «записи мастера на дату»
+            b.HasIndex(x => new { x.UserId, x.StartsAt });
+
+            // Индекс для запросов «записи клиента»
+            b.HasIndex(x => new { x.ClientTelegramId, x.StartsAt });
+
+            // Уникальный частичный индекс — защита от двойной записи на одно время.
+            // Активные статусы (pending, confirmed) не могут пересекаться по starts_at.
+            b.HasIndex(x => new { x.UserId, x.StartsAt })
+             .HasFilter("status IN ('pending', 'confirmed')")
+             .HasDatabaseName("idx_bookings_no_overlap")
+             .IsUnique();
+
             b.HasOne(x => x.User).WithMany()
              .HasForeignKey(x => x.UserId)
              .OnDelete(DeleteBehavior.Cascade);
+
             b.HasOne(x => x.Service).WithMany()
              .HasForeignKey(x => x.ServiceId)
              .OnDelete(DeleteBehavior.Restrict);
