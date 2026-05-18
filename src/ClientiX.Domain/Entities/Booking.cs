@@ -54,6 +54,12 @@ public class Booking
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// ID дополнительных услуг через запятую (если клиент добавил их к основной).
+    /// Например "3,7" — это услуги с Id=3 и Id=7.
+    /// </summary>
+    public string? AdditionalServiceIds { get; set; }
+
     // Navigation
     public User User { get; set; } = null!;
     public Service Service { get; set; } = null!;

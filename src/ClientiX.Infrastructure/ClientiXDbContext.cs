@@ -161,6 +161,8 @@ public class ClientiXDbContext : DbContext
             b.HasOne(x => x.Service).WithMany()
              .HasForeignKey(x => x.ServiceId)
              .OnDelete(DeleteBehavior.Restrict);
+
+            b.Property(x => x.AdditionalServiceIds).HasMaxLength(256);
         });
 
         // --- WorkScheduleTemplate ---

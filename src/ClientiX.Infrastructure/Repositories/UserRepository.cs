@@ -555,4 +555,39 @@ public class UserRepository
             return false;
         }
     }
+
+    public async Task<bool> AddServiceToBookingAsync(
+    long bookingId, long extraServiceId, CancellationToken ct)
+    {
+        var booking = await _db.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId, ct);
+        if (booking is null) return false;
+
+        var extraService = await _db.Services.FirstOrDefaultAsync(s => s.Id == extraServiceId, ct);
+        if (extraService is null) return false;
+        if (extraService.UserId != booking.UserId) return false;
+
+        booking.EndsAt = booking.EndsAt.AddMinutes(extraService.DurationMinutes);
+        booking.DurationMinutes += extraService.DurationMinutes;
+        booking.PriceRub += extraService.PriceRub;
+
+        var existingIds = string.IsNullOrEmpty(booking.AdditionalServiceIds)
+            ? new List<string>()
+            : booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
+        existingIds.Add(extraServiceId.ToString());
+        booking.AdditionalServiceIds = string.Join(",", existingIds);
+
+        booking.UpdatedAt = DateTime.UtcNow;
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            return true;
+        }
+        catch (DbUpdateException ex) when (
+            ex.InnerException?.Message.Contains("idx_bookings_no_overlap") == true)
+        {
+            await _db.Entry(booking).ReloadAsync(ct);
+            return false;
+        }
+    }
 }

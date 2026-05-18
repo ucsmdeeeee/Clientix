@@ -141,4 +141,43 @@ public class BookingSlotService
 
         return result;
     }
+
+    /// <summary>
+    /// Возвращает услуги мастера, которые помещаются сразу после указанного времени окончания
+    /// и до конца рабочего окна на эту дату, и до начала следующей брони (если есть).
+    /// </summary>
+    public async Task<List<long>> GetServicesFittingAfterAsync(
+        long masterUserId, DateTime endsAt, string masterTimeZone, CancellationToken ct)
+    {
+        var endsLocal = TimeZoneInfo.ConvertTimeFromUtc(endsAt, TimeZones.Get(masterTimeZone));
+        var dateLocal = DateTime.SpecifyKind(endsLocal.Date, DateTimeKind.Unspecified);
+
+        var workWindow = await GetWorkWindowAsync(masterUserId, dateLocal, ct);
+        if (workWindow is null) return new();
+
+        var (_, windowEndLocal) = workWindow.Value;
+        var windowEndUtc = TimeZoneInfo.ConvertTimeToUtc(windowEndLocal, TimeZones.Get(masterTimeZone));
+
+        // Берём следующую активную бронь после нашей
+        var nextBookingStart = await _db.Bookings
+            .Where(b => b.UserId == masterUserId
+                     && b.StartsAt > endsAt
+                     && (b.Status == "pending" || b.Status == "confirmed"))
+            .OrderBy(b => b.StartsAt)
+            .Select(b => (DateTime?)b.StartsAt)
+            .FirstOrDefaultAsync(ct);
+
+        var availableUntil = nextBookingStart ?? windowEndUtc;
+        if (nextBookingStart is not null && nextBookingStart > windowEndUtc) availableUntil = windowEndUtc;
+
+        var availableMinutes = (int)Math.Floor((availableUntil - endsAt).TotalMinutes);
+        if (availableMinutes < 15) return new();
+
+        var fittingIds = await _db.Services
+            .Where(s => s.UserId == masterUserId && s.DurationMinutes <= availableMinutes)
+            .Select(s => s.Id)
+            .ToListAsync(ct);
+
+        return fittingIds;
+    }
 }
