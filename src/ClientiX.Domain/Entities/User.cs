@@ -25,4 +25,10 @@ public class User
     public ICollection<PortfolioItem> PortfolioItems { get; set; } = new List<PortfolioItem>();
     public ICollection<WorkScheduleTemplate> ScheduleTemplates { get; set; } = new List<WorkScheduleTemplate>();
     public ICollection<WorkScheduleException> ScheduleExceptions { get; set; } = new List<WorkScheduleException>();
+
+    /// <summary>
+    /// Часовой пояс мастера в формате IANA (Europe/Moscow, Asia/Yekaterinburg и т.п.).
+    /// Используется для всех операций со временем (расписание, брони, отображение).
+    /// </summary>
+    public string TimeZone { get; set; } = "Europe/Moscow";
 }

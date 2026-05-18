@@ -36,6 +36,10 @@ public class ClientiXDbContext : DbContext
             b.Property(u => u.LastName).HasMaxLength(128);
             b.Property(u => u.Phone).HasMaxLength(32);
             b.Property(u => u.ReferralCode).HasMaxLength(16).IsRequired();
+            b.Property(x => x.TimeZone)
+                .HasMaxLength(64)
+                .HasDefaultValue("Europe/Moscow")
+                .IsRequired();
         });
 
         // --- ManagedBot ---

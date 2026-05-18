@@ -507,4 +507,14 @@ public class UserRepository
         await _db.SaveChangesAsync(ct);
         return true;
     }
+
+    public async Task UpdateTimezoneAsync(long telegramId, string timezoneIana, CancellationToken ct)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.TelegramId == telegramId, ct);
+        if (user is null) return;
+
+        user.TimeZone = timezoneIana;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
 }

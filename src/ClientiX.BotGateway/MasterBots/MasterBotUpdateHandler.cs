@@ -7,6 +7,7 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using static StackExchange.Redis.Role;
 
 namespace ClientiX.BotGateway.MasterBots;
 
@@ -436,12 +437,13 @@ public class MasterBotUpdateHandler
             $"\nЧто вы хотите сделать?";
 
         var keyboard = new InlineKeyboardMarkup(new[]
-        {
-        new[] { InlineKeyboardButton.WithCallbackData("📋 Услуги и цены", "client_services") },
-        new[] { InlineKeyboardButton.WithCallbackData("🖼 Портфолио", "client_portfolio") },
-        new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
-        new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О мастере", "client_about") },
-    });
+{
+    new[] { InlineKeyboardButton.WithCallbackData("📋 Услуги и цены", "client_services") },
+    new[] { InlineKeyboardButton.WithCallbackData("🖼 Портфолио", "client_portfolio") },
+    new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
+    new[] { InlineKeyboardButton.WithCallbackData("📒 Мои записи", "client_my_bookings") },
+    new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О мастере", "client_about") },
+});
 
         await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
     }
@@ -500,7 +502,7 @@ public class MasterBotUpdateHandler
     }
 
     private async Task HandleBookServiceChosenAsync(
-        MasterBotContext ctx, ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    MasterBotContext ctx, ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
     {
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
@@ -514,7 +516,11 @@ public class MasterBotUpdateHandler
         var slots = scope.ServiceProvider
             .GetRequiredService<ClientiX.Infrastructure.Bookings.BookingSlotService>();
 
+        var master = await users.GetByIdAsync(ctx.UserId, ct);
+        var masterTz = master?.TimeZone ?? "Europe/Moscow";
+
         var services = await users.GetServicesAsync(ctx.UserId, ct);
+        
         var service = services.FirstOrDefault(s => s.Id == serviceId);
         if (service is null)
         {
@@ -533,7 +539,8 @@ public class MasterBotUpdateHandler
 
         // На 14 дней вперёд найдём дни с свободными слотами
         var days = await slots.GetDaysWithAvailabilityAsync(
-            ctx.UserId, service.DurationMinutes, 14, DateTime.UtcNow, ct);
+            ctx.UserId, service.DurationMinutes, 14, DateTime.UtcNow,
+            master?.TimeZone ?? "Europe/Moscow", ct);
 
         var freeDays = days.Where(d => d.HasFreeSlot).ToList();
         if (freeDays.Count == 0)
@@ -591,12 +598,14 @@ public class MasterBotUpdateHandler
         if (!int.TryParse(state.Data.GetValueOrDefault("service_duration", "0"), out var duration)
             || duration == 0) return;
 
+        var masterTz = state.Data.GetValueOrDefault("master_tz", "Europe/Moscow");
+
         using var scope = _scopeFactory.CreateScope();
         var slotsService = scope.ServiceProvider
             .GetRequiredService<ClientiX.Infrastructure.Bookings.BookingSlotService>();
 
         var availableSlots = await slotsService.GetAvailableSlotsAsync(
-            ctx.UserId, duration, date, DateTime.UtcNow, ct);
+            ctx.UserId, duration, date, DateTime.UtcNow, masterTz, ct);
 
         if (availableSlots.Count == 0)
         {
@@ -608,7 +617,7 @@ public class MasterBotUpdateHandler
         }
 
         state.CurrentStep = "booking_slot";
-        state.Data["date"] = date.ToString("O");
+        state.Data["master_tz"] = masterTz;
         await _states.SetAsync(clientTgId, state);
 
         var serviceName = state.Data.GetValueOrDefault("service_name", "услугу");

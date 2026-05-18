@@ -247,6 +247,12 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        if (data.StartsWith("tz_set:"))
+        {
+            await HandleTimezoneSetAsync(bot, callback, ct);
+            return;
+        }
+
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
         switch (data)
@@ -320,6 +326,10 @@ public class TelegramPollingService : BackgroundService
 
             case "my_bookings":
                 await SendMasterBookingsAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "timezone_change":
+                await SendTimezonePickerAsync(bot, chatId, telegramId, ct);
                 break;
 
             default:
@@ -628,6 +638,7 @@ public class TelegramPollingService : BackgroundService
     new[] { InlineKeyboardButton.WithCallbackData("📅 Моё расписание", "schedule") },
     new[] { InlineKeyboardButton.WithCallbackData("💎 Моя подписка", "subscription_info") },
     new[] { InlineKeyboardButton.WithCallbackData("🤝 Пригласить мастера", "referral") },
+    new[] { InlineKeyboardButton.WithCallbackData("🌍 Часовой пояс", "timezone_change") },
     new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") },
 });
 
@@ -1871,4 +1882,60 @@ public class TelegramPollingService : BackgroundService
                 booking.ClientTelegramId);
         }
     }
+
+    private async Task SendTimezonePickerAsync(
+    ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var current = user.TimeZone;
+
+        var text = "🌍 Часовой пояс\n\n" +
+                   $"Сейчас: <b>{GetTimezoneLabel(current)}</b>\n\n" +
+                   "Выберите ваш часовой пояс.\n" +
+                   "От него зависит расписание и время записей клиентов.";
+
+        var buttons = ClientiX.Infrastructure.TimeZones.RussianZones
+            .Select(z => new[] {
+            InlineKeyboardButton.WithCallbackData(
+                z.Id == current ? $"✅ {z.Label}" : z.Label,
+                $"tz_set:{z.Id}")
+            })
+            .ToList();
+
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet") });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleTimezoneSetAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var tzId = callback.Data!.Replace("tz_set:", "");
+        var validIds = ClientiX.Infrastructure.TimeZones.RussianZones.Select(z => z.Id).ToHashSet();
+        if (!validIds.Contains(tzId)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        await users.UpdateTimezoneAsync(callback.From.Id, tzId, ct);
+
+        var chatId = callback.Message!.Chat.Id;
+        await bot.SendMessage(chatId,
+            $"✅ Часовой пояс изменён на: {GetTimezoneLabel(tzId)}",
+            cancellationToken: ct);
+
+        await SendTimezonePickerAsync(bot, chatId, callback.From.Id, ct);
+    }
+
+    private static string GetTimezoneLabel(string id) =>
+        ClientiX.Infrastructure.TimeZones.RussianZones
+            .FirstOrDefault(z => z.Id == id).Label ?? id;
 }

@@ -27,20 +27,23 @@ public class BookingSlotService
     /// <param name="date">Дата (UTC, время игнорируется).</param>
     /// <param name="now">Текущий момент UTC (для отсечения прошедших слотов сегодня).</param>
     public async Task<List<DateTime>> GetAvailableSlotsAsync(
-        long masterUserId, int serviceDurationMinutes, DateTime date,
-        DateTime now, CancellationToken ct)
+    long masterUserId, int serviceDurationMinutes, DateTime date,
+    DateTime now, string masterTimeZone, CancellationToken ct)
     {
-        date = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
+        var tz = TimeZones.Get(masterTimeZone);
 
-        // 1. Получаем рабочее окно на дату
-        var workWindow = await GetWorkWindowAsync(masterUserId, date, ct);
-        if (workWindow is null) return new List<DateTime>(); // выходной
+        // date — это календарный день в зоне мастера. Берём его как полночь в этой зоне.
+        var dateLocal = DateTime.SpecifyKind(date.Date, DateTimeKind.Unspecified);
 
-        var (windowStart, windowEnd) = workWindow.Value;
+        var workWindow = await GetWorkWindowAsync(masterUserId, dateLocal, ct);
+        if (workWindow is null) return new List<DateTime>();
 
-        // 2. Получаем активные брони на этот день
-        var dayStart = date;
-        var dayEnd = date.AddDays(1);
+        var (windowStartLocal, windowEndLocal) = workWindow.Value;
+        var windowStart = TimeZoneInfo.ConvertTimeToUtc(windowStartLocal, tz);
+        var windowEnd = TimeZoneInfo.ConvertTimeToUtc(windowEndLocal, tz);
+
+        var dayStart = TimeZoneInfo.ConvertTimeToUtc(dateLocal, tz);
+        var dayEnd = TimeZoneInfo.ConvertTimeToUtc(dateLocal.AddDays(1), tz);
 
         var bookings = await _db.Bookings
             .Where(b => b.UserId == masterUserId
@@ -51,7 +54,6 @@ public class BookingSlotService
             .OrderBy(b => b.StartsAt)
             .ToListAsync(ct);
 
-        // 3. Генерируем кандидатов с шагом 15 минут
         var result = new List<DateTime>();
         var candidate = windowStart;
 
@@ -60,17 +62,13 @@ public class BookingSlotService
             var candidateEnd = candidate.AddMinutes(serviceDurationMinutes);
             if (candidateEnd > windowEnd) break;
 
-            // Не предлагаем времена в прошлом (с запасом 10 минут на размышление)
             if (candidate < now.AddMinutes(10))
             {
                 candidate = candidate.AddMinutes(SlotStepMinutes);
                 continue;
             }
 
-            // Проверяем перекрытие с существующими бронями
-            bool overlaps = bookings.Any(b =>
-                candidate < b.EndsAt && candidateEnd > b.StartsAt);
-
+            bool overlaps = bookings.Any(b => candidate < b.EndsAt && candidateEnd > b.StartsAt);
             if (!overlaps) result.Add(candidate);
 
             candidate = candidate.AddMinutes(SlotStepMinutes);
@@ -126,16 +124,16 @@ public class BookingSlotService
     /// есть ли хоть один свободный слот под услугу.
     /// </summary>
     public async Task<List<(DateTime Date, bool HasFreeSlot)>> GetDaysWithAvailabilityAsync(
-        long masterUserId, int serviceDurationMinutes, int daysAhead,
-        DateTime now, CancellationToken ct)
+    long masterUserId, int serviceDurationMinutes, int daysAhead,
+    DateTime now, string masterTimeZone, CancellationToken ct)
     {
         var result = new List<(DateTime, bool)>();
-        var today = DateTime.SpecifyKind(now.Date, DateTimeKind.Utc);
+        var todayLocal = TimeZones.NowInZone(masterTimeZone).Date;
 
         for (int i = 0; i < daysAhead; i++)
         {
-            var date = today.AddDays(i);
-            var slots = await GetAvailableSlotsAsync(masterUserId, serviceDurationMinutes, date, now, ct);
+            var date = todayLocal.AddDays(i);
+            var slots = await GetAvailableSlotsAsync(masterUserId, serviceDurationMinutes, date, now, masterTimeZone, ct);
             result.Add((date, slots.Count > 0));
         }
 
