@@ -23,4 +23,6 @@ public class User
     public Subscription? Subscription { get; set; }
     public ICollection<Service> Services { get; set; } = new List<Service>();
     public ICollection<PortfolioItem> PortfolioItems { get; set; } = new List<PortfolioItem>();
+    public ICollection<WorkScheduleTemplate> ScheduleTemplates { get; set; } = new List<WorkScheduleTemplate>();
+    public ICollection<WorkScheduleException> ScheduleExceptions { get; set; } = new List<WorkScheduleException>();
 }

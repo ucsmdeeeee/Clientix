@@ -19,6 +19,8 @@ public class ClientiXDbContext : DbContext
     public DbSet<Service> Services => Set<Service>();
     public DbSet<PortfolioItem> PortfolioItems => Set<PortfolioItem>();
     public DbSet<Booking> Bookings => Set<Booking>();
+    public DbSet<WorkScheduleTemplate> WorkScheduleTemplates => Set<WorkScheduleTemplate>();
+    public DbSet<WorkScheduleException> WorkScheduleExceptions => Set<WorkScheduleException>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -138,6 +140,27 @@ public class ClientiXDbContext : DbContext
             b.HasOne(x => x.Service).WithMany()
              .HasForeignKey(x => x.ServiceId)
              .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- WorkScheduleTemplate ---
+        modelBuilder.Entity<WorkScheduleTemplate>(b =>
+        {
+            b.ToTable("work_schedule_templates");
+            b.HasIndex(x => new { x.UserId, x.DayOfWeek }).IsUnique();
+            b.HasOne(x => x.User).WithMany(u => u.ScheduleTemplates)
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // --- WorkScheduleException ---
+        modelBuilder.Entity<WorkScheduleException>(b =>
+        {
+            b.ToTable("work_schedule_exceptions");
+            b.HasIndex(x => new { x.UserId, x.Date }).IsUnique();
+            b.Property(x => x.Note).HasMaxLength(256);
+            b.HasOne(x => x.User).WithMany(u => u.ScheduleExceptions)
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
