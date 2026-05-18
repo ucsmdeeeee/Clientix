@@ -2,6 +2,7 @@
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
 namespace ClientiX.BotGateway.MasterBots;
@@ -51,8 +52,7 @@ public class MasterBotUpdateHandler
             }
             else if (update.CallbackQuery is { } callback)
             {
-                // TODO: обработка кнопок в следующем подэтапе
-                await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+                await HandleCallbackAsync(ctx, bot, callback, ct);
             }
         }
         catch (Exception ex)
@@ -150,5 +150,214 @@ public class MasterBotUpdateHandler
             ex = ex.InnerException;
         }
         return false;
+    }
+
+    private async Task HandleCallbackAsync(
+    MasterBotContext ctx, ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var chatId = callback.Message!.Chat.Id;
+        var data = callback.Data ?? "";
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var master = await users.GetByIdAsync(ctx.UserId, ct);
+        if (master is null) return;
+
+        switch (data)
+        {
+            case "client_services":
+                await SendServicesAsync(bot, chatId, master.Id, users, ct);
+                break;
+
+            case "client_portfolio":
+                await SendPortfolioAsync(bot, chatId, master.Id, users, ct);
+                break;
+
+            case "client_about":
+                await SendAboutMasterAsync(bot, chatId, master, ct);
+                break;
+
+            case "client_book":
+                await bot.SendMessage(chatId,
+                    "📅 Запись на услугу\n\n" +
+                    "Эта функция скоро будет доступна.\n" +
+                    "Пока что для записи свяжитесь с мастером напрямую.",
+                    cancellationToken: ct);
+                break;
+
+            case "client_menu":
+                await SendClientMenuAsync(bot, chatId, master, ct);
+                break;
+
+            default:
+                await bot.SendMessage(chatId, "Команда не распознана.",
+                    cancellationToken: ct);
+                break;
+        }
+    }
+
+    private async Task SendServicesAsync(
+        ITelegramBotClient bot, long chatId, long masterId,
+        UserRepository users, CancellationToken ct)
+    {
+        var services = await users.GetServicesAsync(masterId, ct);
+
+        string text;
+        if (services.Count == 0)
+        {
+            text = "📋 Услуги\n\nМастер пока не добавил услуги в каталог.";
+        }
+        else
+        {
+            text = "📋 Услуги мастера:\n\n" +
+                string.Join("\n\n", services.Select((s, i) =>
+                    $"{i + 1}. <b>{System.Net.WebUtility.HtmlEncode(s.Name)}</b>\n" +
+                    $"   ⏱ {s.DurationMinutes} мин\n" +
+                    $"   💰 {s.PriceRub} руб."));
+        }
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
+        new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
+    });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: keyboard,
+            cancellationToken: ct);
+    }
+
+    private async Task SendPortfolioAsync(
+        ITelegramBotClient bot, long chatId, long masterId,
+        UserRepository users, CancellationToken ct)
+    {
+        var items = await users.GetPortfolioAsync(masterId, ct);
+
+        if (items.Count == 0)
+        {
+            await bot.SendMessage(chatId,
+                "🖼 Портфолио\n\nМастер пока не загрузил работы.",
+                replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+                new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
+                }),
+                cancellationToken: ct);
+            return;
+        }
+
+        await bot.SendMessage(chatId,
+            $"🖼 Портфолио мастера ({items.Count} {GetWorksWord(items.Count)})",
+            cancellationToken: ct);
+
+        // Отправляем фотографии группой по 10 (лимит Telegram).
+        // Если работ больше 10 — несколько групп.
+        foreach (var batch in items.Chunk(10))
+        {
+            var media = batch.Select((item, idx) =>
+                new InputMediaPhoto(InputFile.FromFileId(item.TelegramFileId))
+                {
+                    Caption = idx == 0 || string.IsNullOrEmpty(item.Caption)
+                        ? item.Caption
+                        : item.Caption
+                }).Cast<IAlbumInputMedia>().ToArray();
+
+            try
+            {
+                await bot.SendMediaGroup(chatId, media, cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Не удалось отправить группу фото портфолио");
+            }
+        }
+
+        await bot.SendMessage(chatId,
+            "Понравились работы? Запишитесь к мастеру 👇",
+            replyMarkup: new InlineKeyboardMarkup(new[]
+            {
+            new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
+            new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
+            }),
+            cancellationToken: ct);
+    }
+
+    private async Task SendAboutMasterAsync(
+        ITelegramBotClient bot, long chatId, Domain.Entities.User master, CancellationToken ct)
+    {
+        var nicheText = master.ManagedBot?.Niche switch
+        {
+            "nails" => "💅 Маникюр и педикюр",
+            "barber" => "✂️ Парикмахер / барбер",
+            "tattoo" => "🎨 Тату-мастер",
+            "lashes" => "👁 Ресницы и брови",
+            "beauty" => "💆 Косметология и массаж",
+            _ => "🌸 Бьюти-мастер"
+        };
+
+        var text =
+            $"ℹ️ О мастере\n\n" +
+            $"👤 {master.FirstName ?? "—"} {master.LastName ?? ""}\n" +
+            $"💼 {nicheText}\n" +
+            (string.IsNullOrEmpty(master.ManagedBot?.City)
+                ? ""
+                : $"📍 {master.ManagedBot.City}\n");
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
+        new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
+    });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: keyboard,
+            cancellationToken: ct);
+    }
+
+    private async Task SendClientMenuAsync(
+        ITelegramBotClient bot, long chatId,
+        Domain.Entities.User master, CancellationToken ct)
+    {
+        var nicheText = master.ManagedBot?.Niche switch
+        {
+            "nails" => "💅 Мастер маникюра",
+            "barber" => "✂️ Парикмахер",
+            "tattoo" => "🎨 Тату-мастер",
+            "lashes" => "👁 Мастер ресниц и бровей",
+            "beauty" => "💆 Косметолог",
+            _ => "🌸 Бьюти-мастер"
+        };
+
+        var text =
+            $"Главное меню бота {master.FirstName ?? "мастера"}\n\n" +
+            $"{nicheText}\n" +
+            (string.IsNullOrEmpty(master.ManagedBot?.City)
+                ? ""
+                : $"📍 {master.ManagedBot.City}\n") +
+            $"\nЧто вы хотите сделать?";
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] { InlineKeyboardButton.WithCallbackData("📋 Услуги и цены", "client_services") },
+        new[] { InlineKeyboardButton.WithCallbackData("🖼 Портфолио", "client_portfolio") },
+        new[] { InlineKeyboardButton.WithCallbackData("📅 Записаться", "client_book") },
+        new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О мастере", "client_about") },
+    });
+
+        await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
+    }
+
+    private static string GetWorksWord(int count)
+    {
+        int n = count % 100;
+        if (n >= 11 && n <= 19) return "работ";
+        return (n % 10) switch
+        {
+            1 => "работа",
+            2 or 3 or 4 => "работы",
+            _ => "работ"
+        };
     }
 }
