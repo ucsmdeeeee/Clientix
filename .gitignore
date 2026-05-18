@@ -490,3 +490,5 @@ bin/
 obj/
 appsettings.Development.json
 appsettings.*.local.json
+
+.keys/

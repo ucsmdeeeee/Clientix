@@ -184,4 +184,58 @@ public class UserRepository
         await _db.SaveChangesAsync(ct);
         return true;
     }
+
+    /// <summary>
+    /// Привязывает Telegram-бота мастера. Если у мастера уже есть подключённый бот — заменяет данные.
+    /// </summary>
+    public async Task AttachBotAsync(
+        long userId,
+        long botTelegramId,
+        string botUsername,
+        string encryptedToken,
+        string webhookSecret,
+        CancellationToken ct)
+    {
+        var user = await _db.Users
+            .Include(u => u.ManagedBot)
+            .FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null) return;
+
+        if (user.ManagedBot is null)
+        {
+            user.ManagedBot = new ManagedBot
+            {
+                UserId = user.Id,
+                BotTelegramId = botTelegramId,
+                BotUsername = botUsername,
+                BotTokenEncrypted = encryptedToken,
+                WebhookSecret = webhookSecret,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            _db.ManagedBots.Add(user.ManagedBot);
+        }
+        else
+        {
+            user.ManagedBot.BotTelegramId = botTelegramId;
+            user.ManagedBot.BotUsername = botUsername;
+            user.ManagedBot.BotTokenEncrypted = encryptedToken;
+            user.ManagedBot.WebhookSecret = webhookSecret;
+            user.ManagedBot.IsActive = true;
+            user.ManagedBot.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Проверка, что другой мастер уже не подключил тот же бот.
+    /// </summary>
+    public async Task<bool> IsBotAlreadyAttachedAsync(
+        long botTelegramId, long excludeUserId, CancellationToken ct)
+    {
+        return await _db.ManagedBots
+            .AnyAsync(b => b.BotTelegramId == botTelegramId && b.UserId != excludeUserId, ct);
+    }
 }

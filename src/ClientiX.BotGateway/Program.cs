@@ -2,10 +2,12 @@ using ClientiX.BotGateway;
 using ClientiX.Infrastructure.Persistence;
 using ClientiX.Infrastructure.Repositories;
 using ClientiX.Infrastructure.State;
+using ClientiX.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using StackExchange.Redis;
 using Telegram.Bot;
+using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +45,14 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(
 
 // FSM состо€ни€
 builder.Services.AddSingleton<UserStateService>();
+
+// Data Protection дл€ шифровани€ токенов ботов мастеров
+builder.Services.AddDataProtection()
+    .SetApplicationName("ClientiX")
+    .PersistKeysToFileSystem(new DirectoryInfo(
+        Path.Combine(builder.Environment.ContentRootPath, ".keys")));
+
+builder.Services.AddSingleton<TokenProtector>();
 
 // √лавный поллинг-сервис должен быть ѕќ—Ћ≈ƒЌ»ћ Ч он зависит от всего выше
 builder.Services.AddHostedService<TelegramPollingService>();

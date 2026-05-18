@@ -1,5 +1,6 @@
 ﻿using ClientiX.Domain.Entities;
 using ClientiX.Infrastructure.Repositories;
+using ClientiX.Infrastructure.Security;
 using ClientiX.Infrastructure.State;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
@@ -17,17 +18,20 @@ public class TelegramPollingService : BackgroundService
     private readonly ILogger<TelegramPollingService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly UserStateService _states;
+    private readonly TokenProtector _protector;
 
     public TelegramPollingService(
         ITelegramBotClient bot,
         ILogger<TelegramPollingService> logger,
         IServiceScopeFactory scopeFactory,
-        UserStateService states)
+        UserStateService states,
+        TokenProtector protector)
     {
         _bot = bot;
         _logger = logger;
         _scopeFactory = scopeFactory;
         _states = states;
+        _protector = protector;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -191,14 +195,7 @@ public class TelegramPollingService : BackgroundService
         switch (data)
         {
             case "connect_bot":
-                await bot.SendMessage(chatId,
-                    "🤖 Подключение бота\n\n" +
-                    "1) Откройте @BotFather\n" +
-                    "2) Создайте нового бота командой /newbot\n" +
-                    "3) Скопируйте полученный токен\n" +
-                    "4) Отправьте его сюда сообщением\n\n" +
-                    "(Функция будет включена в следующей версии)",
-                    cancellationToken: ct);
+                await StartConnectBotFsmAsync(bot, chatId, telegramId, ct);
                 break;
 
             case "tariffs":
@@ -320,6 +317,9 @@ public class TelegramPollingService : BackgroundService
             case "svc_price":
                 await HandleServicePriceAsync(bot, message, state, ct);
                 break;
+            case "connect_bot_token":
+                await HandleBotTokenAsync(bot, message, state, ct);
+                break;
             default:
                 await bot.SendMessage(message.Chat.Id,
                     "Пожалуйста, выберите вариант кнопкой выше или отправьте /start.",
@@ -400,25 +400,22 @@ public class TelegramPollingService : BackgroundService
     /// Главное меню для мастера, уже прошедшего анкету.
     /// </summary>
     private async Task SendMainMenuAsync(
-        ITelegramBotClient bot, long chatId, DomainUser user, CancellationToken ct)
+    ITelegramBotClient bot, long chatId, DomainUser user, CancellationToken ct)
     {
         var trialEnd = user.Subscription?.TrialEndsAt;
         var daysLeft = trialEnd.HasValue
             ? Math.Max(0, (int)(trialEnd.Value - DateTime.UtcNow).TotalDays)
             : 0;
 
-        var nicheText = user.ManagedBot?.Niche switch
-        {
-            "nails" => "💅 Маникюр / педикюр",
-            "barber" => "✂️ Парикмахер / барбер",
-            "tattoo" => "🎨 Татуировки",
-            "lashes" => "👁 Ресницы / брови",
-            "beauty" => "💆 Косметология / массаж",
-            _ => "🌸 Другое"
-        };
+        var nicheText = NicheToText(user.ManagedBot?.Niche);
+
+        var botStatusLine = !string.IsNullOrEmpty(user.ManagedBot?.BotUsername)
+            ? $"🤖 Ваш бот: @{user.ManagedBot.BotUsername}\n"
+            : "🤖 Бот пока не подключён\n";
 
         var text =
             $"С возвращением, {user.FirstName ?? "мастер"}! 👋\n\n" +
+            botStatusLine +
             $"📍 Город: {user.ManagedBot?.City ?? "не указан"}\n" +
             $"💼 Специализация: {nicheText}\n" +
             $"📊 Статус: {GetStatusEmoji(user.Subscription?.Status)} {GetStatusName(user.Subscription?.Status)}\n" +
@@ -426,13 +423,17 @@ public class TelegramPollingService : BackgroundService
             (daysLeft > 0 ? $"⏳ Осталось дней: {daysLeft}\n" : "") +
             $"\nЧто вы хотите сделать?";
 
+        var connectBotLabel = string.IsNullOrEmpty(user.ManagedBot?.BotUsername)
+            ? "✨ Подключить своего бота"
+            : "🔄 Переподключить бота";
+
         var keyboard = new InlineKeyboardMarkup(new[]
         {
-            new[] { InlineKeyboardButton.WithCallbackData("✨ Подключить своего бота", "connect_bot") },
-            new[] { InlineKeyboardButton.WithCallbackData("💎 Тарифы и подписка", "tariffs") },
-            new[] { InlineKeyboardButton.WithCallbackData("📊 Мой кабинет", "cabinet") },
-            new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О сервисе", "about") },
-        });
+        new[] { InlineKeyboardButton.WithCallbackData(connectBotLabel, "connect_bot") },
+        new[] { InlineKeyboardButton.WithCallbackData("💎 Тарифы и подписка", "tariffs") },
+        new[] { InlineKeyboardButton.WithCallbackData("📊 Мой кабинет", "cabinet") },
+        new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О сервисе", "about") },
+    });
 
         await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
     }
@@ -784,5 +785,139 @@ public class TelegramPollingService : BackgroundService
             cancellationToken: ct);
 
         await SendServicesListAsync(bot, message.Chat.Id, message.From.Id, ct);
+    }
+
+    /// <summary>
+    /// Запуск FSM подключения бота мастера.
+    /// </summary>
+    private async Task StartConnectBotFsmAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        var state = new UserState { CurrentStep = "connect_bot_token" };
+        await _states.SetAsync(telegramId, state);
+
+        await bot.SendMessage(chatId,
+            "🤖 Подключение вашего бота\n\n" +
+            "Пожалуйста, выполните следующие шаги:\n\n" +
+            "1️⃣ Откройте @BotFather в Telegram\n" +
+            "2️⃣ Отправьте команду /newbot\n" +
+            "3️⃣ Введите название (например, «Маникюр у Анны»)\n" +
+            "4️⃣ Введите username бота (должен оканчиваться на _bot, например anna_nails_bot)\n" +
+            "5️⃣ BotFather пришлёт токен вида 7123456789:AAH...\n\n" +
+            "📥 Скопируйте этот токен и отправьте его одним сообщением сюда.\n\n" +
+            "🔒 Ваш токен будет зашифрован и сохранён только в нашей защищённой базе данных.",
+            cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Обработка присланного токена: валидация через Telegram API, шифрование, сохранение.
+    /// </summary>
+    private async Task HandleBotTokenAsync(
+        ITelegramBotClient bot, Message message, UserState state, CancellationToken ct)
+    {
+        var token = (message.Text ?? "").Trim();
+
+        // Поверхностная валидация формата токена: число:строка
+        if (!System.Text.RegularExpressions.Regex.IsMatch(token, @"^\d{6,}:[A-Za-z0-9_\-]{30,}$"))
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "🚫 Это не похоже на токен Telegram-бота.\n\n" +
+                "Токен выглядит так: 7123456789:AAH-длинная-строка\n" +
+                "Попробуйте ещё раз.",
+                cancellationToken: ct);
+            return;
+        }
+
+        // Сообщение о валидации
+        await bot.SendMessage(message.Chat.Id,
+            "🔍 Проверяю токен через Telegram API…",
+            cancellationToken: ct);
+
+        // Валидация через getMe
+        Telegram.Bot.Types.User botInfo;
+        try
+        {
+            var tempClient = new TelegramBotClient(token);
+            botInfo = await tempClient.GetMe(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "Токен невалиден: user={UserId}, error={Error}",
+                message.From!.Id, ex.Message);
+
+            await bot.SendMessage(message.Chat.Id,
+                "🚫 Токен невалиден. Telegram отверг его.\n\n" +
+                "Возможные причины: токен скопирован не полностью, бот был удалён в BotFather, " +
+                "токен был отозван (тогда сгенерируйте новый через /revoke в BotFather).\n\n" +
+                "Попробуйте ещё раз или нажмите /start, чтобы выйти.",
+                cancellationToken: ct);
+            return;
+        }
+
+        // Проверка, что бот ещё не подключён другим мастером
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(message.From!.Id, ct);
+        if (user is null) return;
+
+        if (await users.IsBotAlreadyAttachedAsync(botInfo.Id, user.Id, ct))
+        {
+            await bot.SendMessage(message.Chat.Id,
+                "⚠️ Этот бот уже подключён к другому аккаунту в ClientiX.\n\n" +
+                "Если это ваш бот — обратитесь в поддержку.",
+                cancellationToken: ct);
+            return;
+        }
+
+        // Шифрование токена и генерация webhook-секрета
+        var encryptedToken = _protector.Encrypt(token);
+        var webhookSecret = GenerateWebhookSecret();
+
+        await users.AttachBotAsync(
+            userId: user.Id,
+            botTelegramId: botInfo.Id,
+            botUsername: botInfo.Username ?? "",
+            encryptedToken: encryptedToken,
+            webhookSecret: webhookSecret,
+            ct: ct);
+
+        await _states.ClearAsync(message.From.Id);
+
+        _logger.LogInformation(
+            "Бот мастера подключён: user={UserId}, bot=@{BotUsername}, botId={BotId}",
+            user.Id, botInfo.Username, botInfo.Id);
+
+        var botLink = botInfo.Username is not null
+            ? $"https://t.me/{botInfo.Username}"
+            : "";
+
+        await bot.SendMessage(message.Chat.Id,
+            $"🎉 Готово! Ваш бот подключён.\n\n" +
+            $"🤖 Имя: {botInfo.FirstName}\n" +
+            $"📛 Username: @{botInfo.Username}\n" +
+            $"🔗 Ссылка: {botLink}\n\n" +
+            $"🔒 Токен зашифрован и сохранён в защищённой базе данных платформы.\n\n" +
+            $"Дальше можно настроить услуги и расписание в кабинете.",
+            cancellationToken: ct);
+
+        // Загружаем обновлённого пользователя и показываем меню
+        var updated = await users.GetByTelegramIdAsync(message.From.Id, ct);
+        if (updated is not null)
+        {
+            await SendMainMenuAsync(bot, message.Chat.Id, updated, ct);
+        }
+    }
+
+    /// <summary>
+    /// Генерирует случайный 32-символьный секрет для проверки X-Telegram-Bot-Api-Secret-Token.
+    /// </summary>
+    private static string GenerateWebhookSecret()
+    {
+        const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        var random = Random.Shared;
+        return new string(Enumerable.Range(0, 32)
+            .Select(_ => chars[random.Next(chars.Length)])
+            .ToArray());
     }
 }
