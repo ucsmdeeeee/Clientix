@@ -1979,13 +1979,24 @@ public class TelegramPollingService : BackgroundService
         });
 
                 buttons.Add(new[]
-                {
-            InlineKeyboardButton.WithCallbackData(
-                $"🚫 Отменить {startLocal:dd.MM HH:mm}",
-                $"master_cancel_booking:{b.Id}")
-        });
+            {
+                InlineKeyboardButton.WithCallbackData(
+                    $"🚫 Отменить {startLocal:dd.MM HH:mm}",
+                    $"master_cancel_booking:{b.Id}")
+            });
             }
         }
+
+        // Кнопка возврата в кабинет
+        buttons.Add(new[]
+        {
+        InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet")
+    });
+
+        // Отправляем итоговое сообщение со списком и кнопками
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
     }
 
     private async Task HandleMasterCancelBookingAsync(
