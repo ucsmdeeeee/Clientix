@@ -257,6 +257,18 @@ public class MasterBotUpdateHandler
             return;
         }
 
+        if (data.StartsWith("client_remove_service:"))
+        {
+            await ShowRemoveServiceMenuAsync(ctx, bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("rm_svc:"))
+        {
+            await HandleRemoveServiceConfirmAsync(ctx, bot, callback, ct);
+            return;
+        }
+
         switch (data)
         {
             case "client_services":
@@ -939,12 +951,30 @@ public class MasterBotUpdateHandler
         foreach (var b in bookings.Take(10))
         {
             var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.StartsAt, masterTz);
+
+            // Считаем сколько услуг в записи
+            int servicesCount = 1;
+            if (!string.IsNullOrEmpty(b.AdditionalServiceIds))
+                servicesCount += b.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries).Length;
+
             buttons.Add(new[]
             {
         InlineKeyboardButton.WithCallbackData(
             $"➕ Доп. услуга {startLocal:dd.MM HH:mm}",
             $"client_add_service:{b.Id}")
     });
+
+            // Кнопка удаления услуги только если их больше одной
+            if (servicesCount > 1)
+            {
+                buttons.Add(new[]
+                {
+            InlineKeyboardButton.WithCallbackData(
+                $"➖ Убрать услугу {startLocal:dd.MM HH:mm}",
+                $"client_remove_service:{b.Id}")
+        });
+            }
+
             buttons.Add(new[]
             {
         InlineKeyboardButton.WithCallbackData(
@@ -1752,5 +1782,167 @@ public class MasterBotUpdateHandler
         }
 
         return string.Join(" + ", names);
+    }
+
+    // ============================================================
+    // УДАЛЕНИЕ УСЛУГИ ИЗ ЗАПИСИ КЛИЕНТОМ
+    // ============================================================
+
+    private async Task ShowRemoveServiceMenuAsync(
+        MasterBotContext ctx, ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("client_remove_service:", ""), out var bookingId))
+            return;
+
+        var chatId = callback.Message!.Chat.Id;
+        var clientTgId = callback.From.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.ClientTelegramId != clientTgId || booking.UserId != ctx.UserId)
+        {
+            await bot.SendMessage(chatId, "Запись не найдена.", cancellationToken: ct);
+            return;
+        }
+
+        var allServices = await users.GetServicesAsync(ctx.UserId, ct);
+
+        // Собираем список услуг в записи
+        var servicesInBooking = new List<Domain.Entities.Service>();
+        var mainSvc = allServices.FirstOrDefault(s => s.Id == booking.ServiceId);
+        if (mainSvc is not null) servicesInBooking.Add(mainSvc);
+
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            foreach (var idStr in booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!long.TryParse(idStr, out var id)) continue;
+                var svc = allServices.FirstOrDefault(s => s.Id == id);
+                if (svc is not null) servicesInBooking.Add(svc);
+            }
+        }
+
+        if (servicesInBooking.Count <= 1)
+        {
+            await bot.SendMessage(chatId,
+                "В записи только одна услуга. Чтобы отказаться от неё — отмените запись полностью.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var text = "➖ Какую услугу убрать из записи?\n\n" +
+                   "Длительность и стоимость пересчитаются.";
+
+        var buttons = servicesInBooking.Select(s => new[] {
+        InlineKeyboardButton.WithCallbackData(
+            $"➖ {s.Name} ({s.DurationMinutes} мин, {s.PriceRub} ₽)",
+            $"rm_svc:{bookingId}:{s.Id}")
+    }).ToList();
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« К записям", "client_my_bookings") });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleRemoveServiceConfirmAsync(
+        MasterBotContext ctx, ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var parts = callback.Data!.Replace("rm_svc:", "").Split(':');
+        if (parts.Length != 2) return;
+        if (!long.TryParse(parts[0], out var bookingId)) return;
+        if (!long.TryParse(parts[1], out var serviceId)) return;
+
+        var chatId = callback.Message!.Chat.Id;
+        var clientTgId = callback.From.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+
+        var bookingBefore = await users.GetBookingByIdAsync(bookingId, ct);
+        if (bookingBefore is null || bookingBefore.ClientTelegramId != clientTgId) return;
+
+        var (ok, removedName) = await users.RemoveServiceFromBookingAsync(bookingId, serviceId, ct);
+        if (!ok)
+        {
+            await bot.SendMessage(chatId,
+                "Не удалось убрать услугу. Возможно, это последняя услуга в записи.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var bookingAfter = await users.GetBookingByIdAsync(bookingId, ct);
+        if (bookingAfter is null) return;
+
+        var allMasterServices = await users.GetServicesAsync(ctx.UserId, ct);
+        var fullList = FormatBookingServicesList(bookingAfter, allMasterServices);
+
+        var master = await users.GetByIdAsync(ctx.UserId, ct);
+        var tz = master?.TimeZone ?? "Europe/Moscow";
+        var newEndLocal = ClientiX.Infrastructure.TimeZones.ToZone(bookingAfter.EndsAt, tz);
+
+        await bot.SendMessage(chatId,
+            $"✅ Услуга убрана: {removedName}\n\n" +
+            $"💼 Осталось: {fullList}\n" +
+            $"⏱ Длительность: {bookingAfter.DurationMinutes} мин\n" +
+            $"💰 Итого: {bookingAfter.PriceRub} ₽\n" +
+            $"📅 Закончится в {newEndLocal:HH:mm}",
+            replyMarkup: new InlineKeyboardMarkup(new[]
+            {
+            new[] { InlineKeyboardButton.WithCallbackData("« К записям", "client_my_bookings") }
+            }),
+            cancellationToken: ct);
+
+        _logger.LogInformation(
+            "Клиент убрал услугу из записи: booking={BookingId}, service={ServiceId}",
+            bookingId, serviceId);
+
+        // Уведомление мастеру
+        await NotifyMasterAboutRemovedServiceAsync(scope, ctx.UserId, bookingAfter, removedName ?? "услугу", ct);
+    }
+
+    private async Task NotifyMasterAboutRemovedServiceAsync(
+        IServiceScope scope, long masterUserId,
+        Domain.Entities.Booking booking, string removedServiceName, CancellationToken ct)
+    {
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var master = await users.GetByIdAsync(masterUserId, ct);
+        if (master is null) return;
+
+        var tz = master.TimeZone;
+        var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.StartsAt, tz);
+        var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.EndsAt, tz);
+
+        var allMasterServices = await users.GetServicesAsync(masterUserId, ct);
+        var fullList = FormatBookingServicesList(booking, allMasterServices);
+
+        var clientName = !string.IsNullOrEmpty(booking.ClientFirstName) ? booking.ClientFirstName : "Клиент";
+        var clientLink = !string.IsNullOrEmpty(booking.ClientUsername)
+            ? $"@{booking.ClientUsername}"
+            : $"<a href=\"tg://user?id={booking.ClientTelegramId}\">профиль</a>";
+
+        var text = "➖ Клиент убрал услугу из записи\n\n" +
+                   $"👤 {clientName} ({clientLink})\n" +
+                   $"📅 {startLocal:dd.MM в HH:mm}–{endLocal:HH:mm}\n" +
+                   $"➖ Убрано: {removedServiceName}\n" +
+                   $"💼 Осталось: {fullList}\n" +
+                   $"💰 Итого: {booking.PriceRub} ₽ ({booking.DurationMinutes} мин)";
+
+        try
+        {
+            var mainBot = scope.ServiceProvider.GetRequiredService<ITelegramBotClient>();
+            await mainBot.SendMessage(master.TelegramId, text,
+                parseMode: ParseMode.Html, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Не удалось уведомить мастера об удалении услуги");
+        }
     }
 }

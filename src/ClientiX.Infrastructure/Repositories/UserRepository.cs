@@ -590,4 +590,53 @@ public class UserRepository
             return false;
         }
     }
+
+    /// <summary>
+    /// Удаляет услугу из записи. Если это последняя услуга — возвращает false (надо отменять запись целиком).
+    /// </summary>
+    public async Task<(bool Success, string? RemovedServiceName)> RemoveServiceFromBookingAsync(
+        long bookingId, long serviceIdToRemove, CancellationToken ct)
+    {
+        var booking = await _db.Bookings
+            .Include(b => b.Service)
+            .FirstOrDefaultAsync(b => b.Id == bookingId, ct);
+        if (booking is null) return (false, null);
+
+        var allMasterServices = await _db.Services
+            .Where(s => s.UserId == booking.UserId)
+            .ToListAsync(ct);
+
+        var removingService = allMasterServices.FirstOrDefault(s => s.Id == serviceIdToRemove);
+        if (removingService is null) return (false, null);
+
+        // Считаем все услуги записи
+        var allIds = new List<long> { booking.ServiceId };
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            foreach (var idStr in booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (long.TryParse(idStr, out var id)) allIds.Add(id);
+            }
+        }
+
+        if (!allIds.Contains(serviceIdToRemove)) return (false, removingService.Name);
+        if (allIds.Count <= 1) return (false, removingService.Name); // последняя услуга — нельзя
+
+        // Удаляем serviceIdToRemove из списка (только один экземпляр)
+        allIds.Remove(serviceIdToRemove);
+
+        // Первая оставшаяся становится основной
+        booking.ServiceId = allIds.First();
+        booking.AdditionalServiceIds = allIds.Count > 1
+            ? string.Join(",", allIds.Skip(1))
+            : null;
+
+        booking.DurationMinutes -= removingService.DurationMinutes;
+        booking.PriceRub -= removingService.PriceRub;
+        booking.EndsAt = booking.EndsAt.AddMinutes(-removingService.DurationMinutes);
+        booking.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+        return (true, removingService.Name);
+    }
 }
