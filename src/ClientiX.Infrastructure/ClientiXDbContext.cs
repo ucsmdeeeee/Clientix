@@ -21,6 +21,7 @@ public class ClientiXDbContext : DbContext
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<WorkScheduleTemplate> WorkScheduleTemplates => Set<WorkScheduleTemplate>();
     public DbSet<WorkScheduleException> WorkScheduleExceptions => Set<WorkScheduleException>();
+    public DbSet<NotificationSent> NotificationsSent => Set<NotificationSent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -41,6 +42,7 @@ public class ClientiXDbContext : DbContext
                 .HasDefaultValue("Europe/Moscow")
                 .IsRequired();
             b.Property(x => x.BookingHorizonDays).HasDefaultValue(14).IsRequired();
+            b.Property(x => x.ReminderDayBefore).HasDefaultValue(true);
         });
 
         // --- ManagedBot ---
@@ -201,6 +203,14 @@ public class ClientiXDbContext : DbContext
             b.HasOne(x => x.User).WithMany(u => u.PortfolioItems)
              .HasForeignKey(x => x.UserId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // --- NotificationSent ---
+        modelBuilder.Entity<NotificationSent>(b =>
+        {
+            b.ToTable("notifications_sent");
+            b.Property(x => x.Kind).HasMaxLength(32).IsRequired();
+            b.HasIndex(x => new { x.BookingId, x.Kind }).IsUnique();
         });
     }
 }

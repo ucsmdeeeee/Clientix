@@ -70,6 +70,7 @@ builder.Services.AddHostedService<TelegramPollingService>();
 builder.Services.AddSingleton<MasterBotUpdateHandler>();
 builder.Services.AddSingleton<MasterBotManager>();
 builder.Services.AddHostedService<MasterBotsHostedService>();
+builder.Services.AddHostedService<ReminderHostedService>();
 
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ClientiX.Infrastructure.Payments.YooKassaPaymentService>();

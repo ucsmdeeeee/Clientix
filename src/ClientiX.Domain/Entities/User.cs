@@ -36,4 +36,14 @@ public class User
     /// На сколько дней вперёд клиент может записываться. 7, 14, 30, 60. По умолчанию 14.
     /// </summary>
     public int BookingHorizonDays { get; set; } = 14;
+
+    /// <summary>
+    /// Отправлять напоминание за 24 часа до записи. По умолчанию включено.
+    /// </summary>
+    public bool ReminderDayBefore { get; set; } = true;
+
+    /// <summary>
+    /// Дополнительное напоминание за N часов: null=отключено, 1, 3, 6, 12.
+    /// </summary>
+    public int? ReminderExtraHours { get; set; }
 }

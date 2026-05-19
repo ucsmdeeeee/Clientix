@@ -328,6 +328,18 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        if (data.StartsWith("rem_24:"))
+        {
+            await HandleReminder24SetAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("rem_extra:"))
+        {
+            await HandleReminderExtraSetAsync(bot, callback, ct);
+            return;
+        }
+
         if (data == "noop")
         {
             return;
@@ -418,6 +430,10 @@ public class TelegramPollingService : BackgroundService
 
             case "horizon":
                 await SendHorizonPickerAsync(bot, chatId, telegramId, ct);
+                break;
+
+            case "reminders":
+                await SendRemindersMenuAsync(bot, chatId, telegramId, ct);
                 break;
 
             default:
@@ -731,6 +747,7 @@ public class TelegramPollingService : BackgroundService
     new[] { InlineKeyboardButton.WithCallbackData("💎 Моя подписка", "subscription_info") },
     new[] { InlineKeyboardButton.WithCallbackData("🤝 Пригласить мастера", "referral") },
     new[] { InlineKeyboardButton.WithCallbackData("🌍 Часовой пояс", "timezone_change") },
+    new[] { InlineKeyboardButton.WithCallbackData("🔔 Напоминания клиентам", "reminders") },
     new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") },
 });
 
@@ -3173,5 +3190,90 @@ public class TelegramPollingService : BackgroundService
         {
             _logger.LogWarning(ex, "Не удалось уведомить клиента о переносе мастером");
         }
+    }
+
+    // ============================================================
+    // НАПОМИНАНИЯ КЛИЕНТАМ — НАСТРОЙКИ МАСТЕРА
+    // ============================================================
+
+    private async Task SendRemindersMenuAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var dayStatus = user.ReminderDayBefore ? "✅ Включено" : "⛔ Выключено";
+        var extraText = user.ReminderExtraHours.HasValue
+            ? $"✅ За {user.ReminderExtraHours} часов до записи"
+            : "⛔ Выключено";
+
+        var text = "🔔 Напоминания клиентам\n\n" +
+                   $"<b>За 24 часа:</b> {dayStatus}\n" +
+                   $"<b>Дополнительно:</b> {extraText}\n\n" +
+                   "Напоминания приходят клиенту через ваш бот.";
+
+        var buttons = new List<InlineKeyboardButton[]>
+    {
+        new[] {
+            InlineKeyboardButton.WithCallbackData(
+                user.ReminderDayBefore ? "⛔ Выключить за 24 ч" : "✅ Включить за 24 ч",
+                $"rem_24:{(user.ReminderDayBefore ? "off" : "on")}")
+        },
+    };
+
+        int[] extraOptions = { 1, 3, 6, 12 };
+        foreach (var h in extraOptions)
+        {
+            var label = user.ReminderExtraHours == h ? $"✅ За {h} ч" : $"За {h} ч";
+            buttons.Add(new[] {
+            InlineKeyboardButton.WithCallbackData(label, $"rem_extra:{h}")
+        });
+        }
+        buttons.Add(new[] {
+        InlineKeyboardButton.WithCallbackData(
+            user.ReminderExtraHours.HasValue ? "⛔ Выключить дополнительное" : "Дополнительное выключено",
+            "rem_extra:off")
+    });
+
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet") });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleReminder24SetAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var action = callback.Data!.Replace("rem_24:", "");
+        bool enable = action == "on";
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        await users.UpdateReminderDayBeforeAsync(callback.From.Id, enable, ct);
+
+        await SendRemindersMenuAsync(bot, callback.Message!.Chat.Id, callback.From.Id, ct);
+    }
+
+    private async Task HandleReminderExtraSetAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var raw = callback.Data!.Replace("rem_extra:", "");
+        int? hours = raw == "off" ? null : (int.TryParse(raw, out var h) ? h : null);
+
+        if (hours.HasValue && hours.Value != 1 && hours.Value != 3 && hours.Value != 6 && hours.Value != 12) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        await users.UpdateReminderExtraHoursAsync(callback.From.Id, hours, ct);
+
+        await SendRemindersMenuAsync(bot, callback.Message!.Chat.Id, callback.From.Id, ct);
     }
 }

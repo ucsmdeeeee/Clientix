@@ -639,4 +639,22 @@ public class UserRepository
         await _db.SaveChangesAsync(ct);
         return (true, removingService.Name);
     }
+
+    public async Task UpdateReminderDayBeforeAsync(long telegramId, bool enabled, CancellationToken ct)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.TelegramId == telegramId, ct);
+        if (user is null) return;
+        user.ReminderDayBefore = enabled;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateReminderExtraHoursAsync(long telegramId, int? hours, CancellationToken ct)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.TelegramId == telegramId, ct);
+        if (user is null) return;
+        user.ReminderExtraHours = hours;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
 }
