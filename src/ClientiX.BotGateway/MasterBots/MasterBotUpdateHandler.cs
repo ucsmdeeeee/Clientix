@@ -806,12 +806,15 @@ public class MasterBotUpdateHandler
         var serviceName = state.Data.GetValueOrDefault("service_name", "услугу");
 
         // Сообщение клиенту
+        var masterTz = state.Data.GetValueOrDefault("master_tz", "Europe/Moscow");
+        var slotLocal = ClientiX.Infrastructure.TimeZones.ToZone(slot, masterTz);
+
         await bot.SendMessage(chatId,
             "✅ Запись подтверждена!\n\n" +
-            $"📅 {slot:dddd, dd MMMM} в {slot:HH:mm}\n" +
+            $"📅 {slotLocal:dddd, dd MMMM} в {slotLocal:HH:mm}\n" +
             $"💼 {serviceName}\n\n" +
             "Ждём вас! Если планы изменятся — отмените запись здесь же.",
-            replyMarkup: new InlineKeyboardMarkup(new[]
+                    replyMarkup: new InlineKeyboardMarkup(new[]
             {
             new[] { InlineKeyboardButton.WithCallbackData("« В меню", "client_menu") }
             }),
@@ -863,11 +866,15 @@ public class MasterBotUpdateHandler
         var allServices = await users.GetServicesAsync(masterUserId, ct);
         var servicesList = FormatBookingServicesList(booking, allServices);
 
+        var tz = master.TimeZone;
+        var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.StartsAt, tz);
+        var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.EndsAt, tz);
+
         var text = "🔔 Новая запись!\n\n" +
                    $"👤 Клиент: {clientName} ({clientLink})\n" +
-                   $"📅 Дата: {booking.StartsAt:dddd, dd MMMM yyyy}\n" +
-                   $"🕐 Время: {booking.StartsAt:HH:mm} – {booking.EndsAt:HH:mm}\n" +
-                   $"💼 Услуга: {servicesList}\n" +
+                   $"📅 Дата: {startLocal:dddd, dd MMMM yyyy}\n" +
+                   $"🕐 Время: {startLocal:HH:mm} – {endLocal:HH:mm}\n" +
+                   $"💼 Услуга: {serviceName}\n" +
                    $"💰 Стоимость: {booking.PriceRub} руб.";
 
         try
