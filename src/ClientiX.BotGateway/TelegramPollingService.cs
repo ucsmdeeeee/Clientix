@@ -280,6 +280,27 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        if (data.StartsWith("master_add_service:"))
+        {
+            await ShowMasterAddServiceMenuAsync(bot, callback, ct);
+            return;
+        }
+        if (data.StartsWith("m_add_svc:"))
+        {
+            await HandleMasterAddServiceConfirmAsync(bot, callback, ct);
+            return;
+        }
+        if (data.StartsWith("master_remove_service:"))
+        {
+            await ShowMasterRemoveServiceMenuAsync(bot, callback, ct);
+            return;
+        }
+        if (data.StartsWith("m_rm_svc:"))
+        {
+            await HandleMasterRemoveServiceConfirmAsync(bot, callback, ct);
+            return;
+        }
+
         if (data == "noop")
         {
             return;
@@ -1846,11 +1867,35 @@ public class TelegramPollingService : BackgroundService
         var buttons = new List<InlineKeyboardButton[]>();
         foreach (var b in bookings.Take(10))
         {
-            buttons.Add(new[] {
+            var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.StartsAt, masterTz);
+
+            int servicesCount = 1;
+            if (!string.IsNullOrEmpty(b.AdditionalServiceIds))
+                servicesCount += b.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries).Length;
+
+            buttons.Add(new[]
+            {
+        InlineKeyboardButton.WithCallbackData(
+            $"➕ Доп. услуга {startLocal:dd.MM HH:mm}",
+            $"master_add_service:{b.Id}")
+    });
+
+            if (servicesCount > 1)
+            {
+                buttons.Add(new[]
+                {
             InlineKeyboardButton.WithCallbackData(
-                $"🚫 Отменить {b.StartsAt:dd.MM HH:mm}",
-                $"master_cancel_booking:{b.Id}")
+                $"➖ Убрать услугу {startLocal:dd.MM HH:mm}",
+                $"master_remove_service:{b.Id}")
         });
+            }
+
+            buttons.Add(new[]
+            {
+        InlineKeyboardButton.WithCallbackData(
+            $"🚫 Отменить {startLocal:dd.MM HH:mm}",
+            $"master_cancel_booking:{b.Id}")
+    });
         }
         buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet") });
 
@@ -2440,5 +2485,324 @@ public class TelegramPollingService : BackgroundService
         }
 
         return string.Join(" + ", names);
+    }
+
+    // ============================================================
+    // МАСТЕР ДОБАВЛЯЕТ УСЛУГУ В ЗАПИСЬ КЛИЕНТА
+    // ============================================================
+
+    private async Task ShowMasterAddServiceMenuAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("master_add_service:", ""), out var bookingId))
+            return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var slotsService = scope.ServiceProvider
+            .GetRequiredService<ClientiX.Infrastructure.Bookings.BookingSlotService>();
+
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.UserId != user.Id)
+        {
+            await bot.SendMessage(chatId, "Запись не найдена.", cancellationToken: ct);
+            return;
+        }
+
+        var fittingIds = await slotsService.GetServicesFittingAfterAsync(
+            user.Id, booking.EndsAt, user.TimeZone, ct);
+
+        if (fittingIds.Count == 0)
+        {
+            await bot.SendMessage(chatId,
+                "😔 Нет услуг, которые помещаются сразу после этой записи.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var allServices = await users.GetServicesAsync(user.Id, ct);
+
+        var alreadyInBooking = new HashSet<long> { booking.ServiceId };
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            foreach (var idStr in booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (long.TryParse(idStr, out var id)) alreadyInBooking.Add(id);
+            }
+        }
+
+        var available = allServices
+            .Where(s => fittingIds.Contains(s.Id))
+            .Where(s => !alreadyInBooking.Contains(s.Id))
+            .ToList();
+
+        if (available.Count == 0)
+        {
+            await bot.SendMessage(chatId,
+                "Все подходящие услуги уже включены в эту запись.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.EndsAt, user.TimeZone);
+
+        var text = "➕ Добавление услуги клиенту\n\n" +
+                   $"Запись закончится в {endLocal:HH:mm}. Доступны эти услуги:";
+
+        var buttons = available.Select(s => new[] {
+        InlineKeyboardButton.WithCallbackData(
+            $"+ {s.Name} ({s.DurationMinutes} мин, {s.PriceRub} ₽)",
+            $"m_add_svc:{bookingId}:{s.Id}")
+    }).ToList();
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« К записям", "my_bookings") });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleMasterAddServiceConfirmAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var parts = callback.Data!.Replace("m_add_svc:", "").Split(':');
+        if (parts.Length != 2) return;
+        if (!long.TryParse(parts[0], out var bookingId)) return;
+        if (!long.TryParse(parts[1], out var serviceId)) return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.UserId != user.Id) return;
+
+        var ok = await users.AddServiceToBookingAsync(bookingId, serviceId, ct);
+        if (!ok)
+        {
+            await bot.SendMessage(chatId, "🚫 Не удалось добавить услугу.", cancellationToken: ct);
+            return;
+        }
+
+        var bookingAfter = await users.GetBookingByIdAsync(bookingId, ct);
+        if (bookingAfter is null) return;
+
+        var allServices = await users.GetServicesAsync(user.Id, ct);
+        var addedService = allServices.FirstOrDefault(s => s.Id == serviceId);
+        var fullList = FormatBookingServicesList(bookingAfter, allServices);
+
+        var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(bookingAfter.EndsAt, user.TimeZone);
+
+        await bot.SendMessage(chatId,
+            $"✅ Услуга добавлена клиенту!\n\n" +
+            $"➕ {addedService?.Name}\n" +
+            $"💼 В записи: {fullList}\n" +
+            $"⏱ Длительность: {bookingAfter.DurationMinutes} мин\n" +
+            $"💰 Итого: {bookingAfter.PriceRub} ₽\n" +
+            $"📅 Закончится в {endLocal:HH:mm}",
+            cancellationToken: ct);
+
+        _logger.LogInformation(
+            "Мастер добавил услугу клиенту: booking={BookingId}, service={ServiceId}",
+            bookingId, serviceId);
+
+        // Уведомление клиенту через бот мастера
+        await NotifyClientAboutServiceAddedByMasterAsync(scope, user.Id, bookingAfter, addedService, ct);
+    }
+
+    private async Task NotifyClientAboutServiceAddedByMasterAsync(
+        IServiceScope scope, long masterUserId,
+        Domain.Entities.Booking booking, Domain.Entities.Service? addedService, CancellationToken ct)
+    {
+        if (addedService is null) return;
+
+        var manager = scope.ServiceProvider
+            .GetRequiredService<ClientiX.BotGateway.MasterBots.MasterBotManager>();
+
+        if (!manager.ActiveBots.TryGetValue(masterUserId, out var masterBotContext)) return;
+
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var master = await users.GetByIdAsync(masterUserId, ct);
+        if (master is null) return;
+
+        var tz = master.TimeZone;
+        var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.StartsAt, tz);
+        var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.EndsAt, tz);
+        var allServices = await users.GetServicesAsync(masterUserId, ct);
+        var fullList = FormatBookingServicesList(booking, allServices);
+
+        var text = "ℹ️ Мастер добавил услугу в вашу запись:\n\n" +
+                   $"📅 {startLocal:dd.MM в HH:mm}–{endLocal:HH:mm}\n" +
+                   $"➕ Добавлено: {addedService.Name}\n" +
+                   $"💼 Теперь в записи: {fullList}\n" +
+                   $"💰 Итого: {booking.PriceRub} ₽ ({booking.DurationMinutes} мин)";
+
+        try
+        {
+            await masterBotContext.Client.SendMessage(booking.ClientTelegramId, text, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Не удалось уведомить клиента о доп. услуге от мастера");
+        }
+    }
+
+    // ============================================================
+    // МАСТЕР УБИРАЕТ УСЛУГУ ИЗ ЗАПИСИ КЛИЕНТА
+    // ============================================================
+
+    private async Task ShowMasterRemoveServiceMenuAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("master_remove_service:", ""), out var bookingId))
+            return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.UserId != user.Id) return;
+
+        var allServices = await users.GetServicesAsync(user.Id, ct);
+
+        var servicesInBooking = new List<Domain.Entities.Service>();
+        var mainSvc = allServices.FirstOrDefault(s => s.Id == booking.ServiceId);
+        if (mainSvc is not null) servicesInBooking.Add(mainSvc);
+
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            foreach (var idStr in booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!long.TryParse(idStr, out var id)) continue;
+                var svc = allServices.FirstOrDefault(s => s.Id == id);
+                if (svc is not null) servicesInBooking.Add(svc);
+            }
+        }
+
+        if (servicesInBooking.Count <= 1)
+        {
+            await bot.SendMessage(chatId,
+                "В записи только одна услуга. Чтобы отменить запись — используйте 🚫 Отменить.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var text = "➖ Какую услугу убрать у клиента?";
+
+        var buttons = servicesInBooking.Select(s => new[] {
+        InlineKeyboardButton.WithCallbackData(
+            $"➖ {s.Name} ({s.DurationMinutes} мин, {s.PriceRub} ₽)",
+            $"m_rm_svc:{bookingId}:{s.Id}")
+    }).ToList();
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« К записям", "my_bookings") });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleMasterRemoveServiceConfirmAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var parts = callback.Data!.Replace("m_rm_svc:", "").Split(':');
+        if (parts.Length != 2) return;
+        if (!long.TryParse(parts[0], out var bookingId)) return;
+        if (!long.TryParse(parts[1], out var serviceId)) return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var bookingBefore = await users.GetBookingByIdAsync(bookingId, ct);
+        if (bookingBefore is null || bookingBefore.UserId != user.Id) return;
+
+        var (ok, removedName) = await users.RemoveServiceFromBookingAsync(bookingId, serviceId, ct);
+        if (!ok)
+        {
+            await bot.SendMessage(chatId,
+                "Не удалось убрать услугу. Возможно, это последняя.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var bookingAfter = await users.GetBookingByIdAsync(bookingId, ct);
+        if (bookingAfter is null) return;
+
+        var allServices = await users.GetServicesAsync(user.Id, ct);
+        var fullList = FormatBookingServicesList(bookingAfter, allServices);
+        var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(bookingAfter.EndsAt, user.TimeZone);
+
+        await bot.SendMessage(chatId,
+            $"✅ Услуга убрана: {removedName}\n\n" +
+            $"💼 Осталось: {fullList}\n" +
+            $"⏱ Длительность: {bookingAfter.DurationMinutes} мин\n" +
+            $"💰 Итого: {bookingAfter.PriceRub} ₽\n" +
+            $"📅 Закончится в {endLocal:HH:mm}",
+            cancellationToken: ct);
+
+        _logger.LogInformation(
+            "Мастер убрал услугу из записи: booking={BookingId}, service={ServiceId}",
+            bookingId, serviceId);
+
+        // Уведомление клиенту через бот мастера
+        await NotifyClientAboutServiceRemovedByMasterAsync(
+            scope, user.Id, bookingAfter, removedName ?? "услугу", ct);
+    }
+
+    private async Task NotifyClientAboutServiceRemovedByMasterAsync(
+        IServiceScope scope, long masterUserId,
+        Domain.Entities.Booking booking, string removedServiceName, CancellationToken ct)
+    {
+        var manager = scope.ServiceProvider
+            .GetRequiredService<ClientiX.BotGateway.MasterBots.MasterBotManager>();
+        if (!manager.ActiveBots.TryGetValue(masterUserId, out var masterBotContext)) return;
+
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var master = await users.GetByIdAsync(masterUserId, ct);
+        if (master is null) return;
+
+        var tz = master.TimeZone;
+        var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.StartsAt, tz);
+        var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.EndsAt, tz);
+        var allServices = await users.GetServicesAsync(masterUserId, ct);
+        var fullList = FormatBookingServicesList(booking, allServices);
+
+        var text = "ℹ️ Мастер изменил вашу запись:\n\n" +
+                   $"📅 {startLocal:dd.MM в HH:mm}–{endLocal:HH:mm}\n" +
+                   $"➖ Убрано: {removedServiceName}\n" +
+                   $"💼 Осталось: {fullList}\n" +
+                   $"💰 Итого: {booking.PriceRub} ₽ ({booking.DurationMinutes} мин)\n\n" +
+                   "Если у вас есть вопросы — свяжитесь с мастером.";
+
+        try
+        {
+            await masterBotContext.Client.SendMessage(booking.ClientTelegramId, text, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Не удалось уведомить клиента об удалении услуги мастером");
+        }
     }
 }
