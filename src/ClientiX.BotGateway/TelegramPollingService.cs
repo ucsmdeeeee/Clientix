@@ -285,19 +285,46 @@ public class TelegramPollingService : BackgroundService
             await ShowMasterAddServiceMenuAsync(bot, callback, ct);
             return;
         }
+
         if (data.StartsWith("m_add_svc:"))
         {
             await HandleMasterAddServiceConfirmAsync(bot, callback, ct);
             return;
         }
+
         if (data.StartsWith("master_remove_service:"))
         {
             await ShowMasterRemoveServiceMenuAsync(bot, callback, ct);
             return;
         }
+
         if (data.StartsWith("m_rm_svc:"))
         {
             await HandleMasterRemoveServiceConfirmAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("master_reschedule:"))
+        {
+            await StartMasterRescheduleAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("m_resched_date:"))
+        {
+            await HandleMasterRescheduleDateAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data.StartsWith("m_resched_slot:"))
+        {
+            await HandleMasterRescheduleSlotAsync(bot, callback, ct);
+            return;
+        }
+
+        if (data == "m_resched_confirm")
+        {
+            await HandleMasterRescheduleConfirmAsync(bot, callback, ct);
             return;
         }
 
@@ -1893,6 +1920,13 @@ public class TelegramPollingService : BackgroundService
             buttons.Add(new[]
             {
         InlineKeyboardButton.WithCallbackData(
+            $"🔄 Перенести {startLocal:dd.MM HH:mm}",
+            $"master_reschedule:{b.Id}")
+    });
+
+            buttons.Add(new[]
+            {
+        InlineKeyboardButton.WithCallbackData(
             $"🚫 Отменить {startLocal:dd.MM HH:mm}",
             $"master_cancel_booking:{b.Id}")
     });
@@ -2803,6 +2837,341 @@ public class TelegramPollingService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Не удалось уведомить клиента об удалении услуги мастером");
+        }
+    }
+
+    // ============================================================
+    // МАСТЕР ПЕРЕНОСИТ ЗАПИСЬ КЛИЕНТА
+    // ============================================================
+
+    private async Task StartMasterRescheduleAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        if (!long.TryParse(callback.Data!.Replace("master_reschedule:", ""), out var bookingId))
+            return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var slotsService = scope.ServiceProvider
+            .GetRequiredService<ClientiX.Infrastructure.Bookings.BookingSlotService>();
+
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.UserId != user.Id)
+        {
+            await bot.SendMessage(chatId, "Запись не найдена.", cancellationToken: ct);
+            return;
+        }
+
+        var horizon = user.BookingHorizonDays;
+        var days = await slotsService.GetDaysWithAvailabilityAsync(
+            user.Id, booking.DurationMinutes, horizon, DateTime.UtcNow, user.TimeZone, ct);
+
+        if (!days.Any(d => d.HasFreeSlot))
+        {
+            await bot.SendMessage(chatId,
+                "😔 Нет свободных слотов для переноса.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var state = new UserState
+        {
+            CurrentStep = "master_rescheduling_date",
+            Data =
+        {
+            ["booking_id"] = bookingId.ToString(),
+            ["service_duration"] = booking.DurationMinutes.ToString()
+        }
+        };
+        await _states.SetAsync(callback.From.Id, state);
+
+        var todayLocal = ClientiX.Infrastructure.TimeZones.NowInZone(user.TimeZone).Date;
+        var firstOfMonth = new DateTime(todayLocal.Year, todayLocal.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+
+        await SendMasterRescheduleCalendarAsync(bot, chatId, user, booking, days, firstOfMonth, ct);
+    }
+
+    private async Task SendMasterRescheduleCalendarAsync(
+        ITelegramBotClient bot, long chatId, Domain.Entities.User master,
+        Domain.Entities.Booking booking,
+        List<(DateTime Date, bool HasFreeSlot)> availabilityDays,
+        DateTime firstOfMonth, CancellationToken ct)
+    {
+        var todayLocal = ClientiX.Infrastructure.TimeZones.NowInZone(master.TimeZone).Date;
+        var oldLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.StartsAt, master.TimeZone);
+
+        int daysInMonth = DateTime.DaysInMonth(firstOfMonth.Year, firstOfMonth.Month);
+        int firstWeekday = ((int)firstOfMonth.DayOfWeek + 6) % 7;
+
+        var freeMap = availabilityDays.ToDictionary(d => d.Date.Date, d => d.HasFreeSlot);
+
+        var ruMonths = new[] { "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                           "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь" };
+        var monthName = $"{ruMonths[firstOfMonth.Month - 1]} {firstOfMonth.Year}";
+
+        var clientName = !string.IsNullOrEmpty(booking.ClientFirstName) ? booking.ClientFirstName : "Клиент";
+
+        var text = $"🔄 Перенос записи клиента\n\n" +
+                   $"👤 {clientName}\n" +
+                   $"Текущая: <b>{oldLocal:dd.MM в HH:mm}</b>\n\n" +
+                   $"<b>{monthName}</b>\n\n" +
+                   $"Выберите новую дату:";
+
+        var buttons = new List<InlineKeyboardButton[]>();
+        buttons.Add(new[]
+        {
+        InlineKeyboardButton.WithCallbackData("Пн", "noop"),
+        InlineKeyboardButton.WithCallbackData("Вт", "noop"),
+        InlineKeyboardButton.WithCallbackData("Ср", "noop"),
+        InlineKeyboardButton.WithCallbackData("Чт", "noop"),
+        InlineKeyboardButton.WithCallbackData("Пт", "noop"),
+        InlineKeyboardButton.WithCallbackData("Сб", "noop"),
+        InlineKeyboardButton.WithCallbackData("Вс", "noop"),
+    });
+
+        var row = new List<InlineKeyboardButton>();
+        for (int i = 0; i < firstWeekday; i++)
+            row.Add(InlineKeyboardButton.WithCallbackData(" ", "noop"));
+
+        for (int day = 1; day <= daysInMonth; day++)
+        {
+            var date = new DateTime(firstOfMonth.Year, firstOfMonth.Month, day, 0, 0, 0, DateTimeKind.Unspecified);
+            bool hasFree = freeMap.TryGetValue(date.Date, out var f) && f;
+            bool isPast = date.Date < todayLocal;
+
+            if (isPast || !hasFree)
+                row.Add(InlineKeyboardButton.WithCallbackData($"⚪{day}", "noop"));
+            else
+                row.Add(InlineKeyboardButton.WithCallbackData($"🟢{day}", $"m_resched_date:{date:yyyy-MM-dd}"));
+
+            if (row.Count == 7) { buttons.Add(row.ToArray()); row = new List<InlineKeyboardButton>(); }
+        }
+        if (row.Count > 0)
+        {
+            while (row.Count < 7) row.Add(InlineKeyboardButton.WithCallbackData(" ", "noop"));
+            buttons.Add(row.ToArray());
+        }
+
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« К записям", "my_bookings") });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleMasterRescheduleDateAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var dateStr = callback.Data!.Replace("m_resched_date:", "");
+        if (!DateTime.TryParseExact(dateStr, "yyyy-MM-dd", null,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var date))
+            return;
+        date = DateTime.SpecifyKind(date.Date, DateTimeKind.Unspecified);
+
+        var chatId = callback.Message!.Chat.Id;
+        var tgId = callback.From.Id;
+
+        var state = await _states.GetAsync(tgId);
+        if (state is null || state.CurrentStep != "master_rescheduling_date") return;
+
+        if (!int.TryParse(state.Data.GetValueOrDefault("service_duration", "0"), out var duration)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(tgId, ct);
+        if (user is null) return;
+
+        var slotsService = scope.ServiceProvider
+            .GetRequiredService<ClientiX.Infrastructure.Bookings.BookingSlotService>();
+
+        var slots = await slotsService.GetAvailableSlotsAsync(
+            user.Id, duration, date, DateTime.UtcNow, user.TimeZone, ct);
+
+        if (slots.Count == 0)
+        {
+            await bot.SendMessage(chatId,
+                "На эту дату слотов нет. Выберите другую.",
+                cancellationToken: ct);
+            return;
+        }
+
+        state.CurrentStep = "master_rescheduling_slot";
+        state.Data["new_date"] = date.ToString("O");
+        await _states.SetAsync(tgId, state);
+
+        var text = $"📅 {date:dddd, dd MMMM}\n\nВыберите новое время:";
+
+        var buttons = new List<InlineKeyboardButton[]>();
+        var row = new List<InlineKeyboardButton>();
+        foreach (var slot in slots)
+        {
+            var slotLocal = ClientiX.Infrastructure.TimeZones.ToZone(slot, user.TimeZone);
+            row.Add(InlineKeyboardButton.WithCallbackData(
+                slotLocal.ToString("HH:mm"),
+                $"m_resched_slot:{slot:yyyy-MM-ddTHH:mm}"));
+            if (row.Count == 3) { buttons.Add(row.ToArray()); row = new List<InlineKeyboardButton>(); }
+        }
+        if (row.Count > 0) buttons.Add(row.ToArray());
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« К записям", "my_bookings") });
+
+        await bot.SendMessage(chatId, text,
+            replyMarkup: new InlineKeyboardMarkup(buttons),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleMasterRescheduleSlotAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var slotStr = callback.Data!.Replace("m_resched_slot:", "");
+        if (!DateTime.TryParseExact(slotStr, "yyyy-MM-ddTHH:mm", null,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var slot)) return;
+        slot = DateTime.SpecifyKind(slot, DateTimeKind.Utc);
+
+        var chatId = callback.Message!.Chat.Id;
+        var tgId = callback.From.Id;
+
+        var state = await _states.GetAsync(tgId);
+        if (state is null) return;
+
+        state.CurrentStep = "master_rescheduling_confirm";
+        state.Data["new_slot"] = slot.ToString("O");
+        await _states.SetAsync(tgId, state);
+
+        if (!long.TryParse(state.Data.GetValueOrDefault("booking_id", "0"), out var bookingId)) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(tgId, ct);
+        if (user is null) return;
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null) return;
+
+        var oldLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.StartsAt, user.TimeZone);
+        var newLocal = ClientiX.Infrastructure.TimeZones.ToZone(slot, user.TimeZone);
+
+        var clientName = !string.IsNullOrEmpty(booking.ClientFirstName) ? booking.ClientFirstName : "Клиент";
+
+        var text = "🔄 Подтвердите перенос:\n\n" +
+                   $"👤 {clientName}\n" +
+                   $"📅 Было: {oldLocal:dd.MM в HH:mm}\n" +
+                   $"📅 Станет: <b>{newLocal:dd.MM в HH:mm}</b>\n\n" +
+                   "Подтвердить?";
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] { InlineKeyboardButton.WithCallbackData("✅ Перенести", "m_resched_confirm") },
+        new[] { InlineKeyboardButton.WithCallbackData("« К записям", "my_bookings") }
+    });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: keyboard,
+            cancellationToken: ct);
+    }
+
+    private async Task HandleMasterRescheduleConfirmAsync(
+        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var chatId = callback.Message!.Chat.Id;
+        var tgId = callback.From.Id;
+
+        var state = await _states.GetAsync(tgId);
+        if (state is null || state.CurrentStep != "master_rescheduling_confirm")
+        {
+            await bot.SendMessage(chatId, "Сессия устарела.", cancellationToken: ct);
+            return;
+        }
+
+        if (!long.TryParse(state.Data.GetValueOrDefault("booking_id", "0"), out var bookingId)) return;
+        if (!DateTime.TryParse(state.Data.GetValueOrDefault("new_slot", ""), null,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var newSlot)) return;
+        newSlot = DateTime.SpecifyKind(newSlot, DateTimeKind.Utc);
+
+        if (!int.TryParse(state.Data.GetValueOrDefault("service_duration", "0"), out var duration)) return;
+        var newEnd = newSlot.AddMinutes(duration);
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(tgId, ct);
+        if (user is null) return;
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.UserId != user.Id) return;
+        var oldStart = booking.StartsAt;
+
+        var ok = await users.RescheduleBookingAsync(bookingId, newSlot, newEnd, ct);
+        if (!ok)
+        {
+            await bot.SendMessage(chatId,
+                "🚫 Это время уже занято другой записью.",
+                cancellationToken: ct);
+            return;
+        }
+
+        await _states.ClearAsync(tgId);
+
+        var newLocal = ClientiX.Infrastructure.TimeZones.ToZone(newSlot, user.TimeZone);
+
+        await bot.SendMessage(chatId,
+            $"✅ Запись перенесена!\n\n📅 Новое время: {newLocal:dddd, dd MMMM в HH:mm}",
+            cancellationToken: ct);
+
+        _logger.LogInformation(
+            "Мастер перенёс запись id={BookingId}: {Old} → {New}",
+            bookingId, oldStart, newSlot);
+
+        // Уведомление клиенту через бот мастера
+        await NotifyClientAboutRescheduleByMasterAsync(scope, user.Id, booking, oldStart, newSlot, ct);
+    }
+
+    private async Task NotifyClientAboutRescheduleByMasterAsync(
+        IServiceScope scope, long masterUserId,
+        Domain.Entities.Booking booking, DateTime oldStart, DateTime newStart, CancellationToken ct)
+    {
+        var manager = scope.ServiceProvider
+            .GetRequiredService<ClientiX.BotGateway.MasterBots.MasterBotManager>();
+        if (!manager.ActiveBots.TryGetValue(masterUserId, out var masterBotContext)) return;
+
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var master = await users.GetByIdAsync(masterUserId, ct);
+        if (master is null) return;
+
+        var tz = master.TimeZone;
+        var oldLocal = ClientiX.Infrastructure.TimeZones.ToZone(oldStart, tz);
+        var newLocal = ClientiX.Infrastructure.TimeZones.ToZone(newStart, tz);
+        var allServices = await users.GetServicesAsync(masterUserId, ct);
+        var fullList = FormatBookingServicesList(booking, allServices);
+
+        var text = "🔄 Мастер перенёс вашу запись:\n\n" +
+                   $"💼 {fullList}\n" +
+                   $"📅 Было: {oldLocal:dd.MM в HH:mm}\n" +
+                   $"📅 Стало: <b>{newLocal:dd.MM в HH:mm}</b>\n\n" +
+                   "Если время не подходит — свяжитесь с мастером или отмените запись.";
+
+        try
+        {
+            await masterBotContext.Client.SendMessage(
+                booking.ClientTelegramId, text,
+                parseMode: ParseMode.Html, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Не удалось уведомить клиента о переносе мастером");
         }
     }
 }
