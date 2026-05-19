@@ -13,6 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
 using DomainUser = ClientiX.Domain.Entities.User;
+using static ClientiX.Infrastructure.Repositories.UserRepository;
 
 namespace ClientiX.BotGateway;
 
@@ -448,6 +449,10 @@ public class TelegramPollingService : BackgroundService
                 await SendRemindersMenuAsync(bot, chatId, telegramId, ct);
                 break;
 
+            case "stats":
+                await SendStatsAsync(bot, chatId, telegramId, ct);
+                break;
+
             default:
                 await bot.SendMessage(chatId,
                     "Команда не распознана. Отправьте /start для возврата в меню.",
@@ -760,6 +765,7 @@ public class TelegramPollingService : BackgroundService
     new[] { InlineKeyboardButton.WithCallbackData("🤝 Пригласить мастера", "referral") },
     new[] { InlineKeyboardButton.WithCallbackData("🌍 Часовой пояс", "timezone_change") },
     new[] { InlineKeyboardButton.WithCallbackData("🔔 Напоминания клиентам", "reminders") },
+    new[] { InlineKeyboardButton.WithCallbackData("📊 Статистика", "stats") },
     new[] { InlineKeyboardButton.WithCallbackData("« Назад в меню", "main_menu") },
 });
 
@@ -3363,5 +3369,74 @@ public class TelegramPollingService : BackgroundService
 
         // Возврат к списку
         await SendMasterBookingsAsync(bot, chatId, callback.From.Id, ct);
+    }
+
+    // ============================================================
+    // СТАТИСТИКА МАСТЕРА
+    // ============================================================
+
+    private async Task SendStatsAsync(
+        ITelegramBotClient bot, long chatId, long telegramId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(telegramId, ct);
+        if (user is null) return;
+
+        var tz = user.TimeZone;
+        var nowLocal = ClientiX.Infrastructure.TimeZones.NowInZone(tz);
+
+        // Сегодня
+        var todayStartLocal = nowLocal.Date;
+        var todayEndLocal = todayStartLocal.AddDays(1);
+        var todayStartUtc = ClientiX.Infrastructure.TimeZones.ZoneToUtc(todayStartLocal, tz);
+        var todayEndUtc = ClientiX.Infrastructure.TimeZones.ZoneToUtc(todayEndLocal, tz);
+
+        // Неделя (последние 7 дней включая сегодня)
+        var weekStartLocal = todayStartLocal.AddDays(-6);
+        var weekStartUtc = ClientiX.Infrastructure.TimeZones.ZoneToUtc(weekStartLocal, tz);
+
+        // Месяц (последние 30 дней)
+        var monthStartLocal = todayStartLocal.AddDays(-29);
+        var monthStartUtc = ClientiX.Infrastructure.TimeZones.ZoneToUtc(monthStartLocal, tz);
+
+        var statsToday = await users.GetStatsAsync(user.Id, todayStartUtc, todayEndUtc, ct);
+        var statsWeek = await users.GetStatsAsync(user.Id, weekStartUtc, todayEndUtc, ct);
+        var statsMonth = await users.GetStatsAsync(user.Id, monthStartUtc, todayEndUtc, ct);
+
+        static string FormatBlock(string label, BookingStats s)
+        {
+            var completionRate = s.Completed + s.NoShow > 0
+                ? (int)Math.Round(100.0 * s.Completed / (s.Completed + s.NoShow))
+                : 0;
+            return
+                $"<b>{label}</b>\n" +
+                $"Всего записей: {s.Total}\n" +
+                $"✅ Завершено: {s.Completed}\n" +
+                $"🕳 Не пришли: {s.NoShow}\n" +
+                $"❌ Отменено клиентами: {s.CancelledByClient}\n" +
+                $"🚫 Отменено вами: {s.CancelledByMaster}\n" +
+                $"📅 Ожидают: {s.Upcoming}\n" +
+                $"💰 Доход: <b>{s.RevenueRub:N0} ₽</b>" +
+                (s.Completed + s.NoShow > 0
+                    ? $"\n📈 Доходимость: {completionRate}%"
+                    : "");
+        }
+
+        var text =
+            $"📊 Статистика\n\n" +
+            FormatBlock("Сегодня", statsToday) + "\n\n" +
+            FormatBlock("За 7 дней", statsWeek) + "\n\n" +
+            FormatBlock("За 30 дней", statsMonth);
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+        new[] { InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet") }
+    });
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.Html,
+            replyMarkup: keyboard,
+            cancellationToken: ct);
     }
 }

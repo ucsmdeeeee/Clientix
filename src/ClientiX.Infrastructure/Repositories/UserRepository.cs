@@ -675,4 +675,25 @@ public class UserRepository
         await _db.SaveChangesAsync(ct);
         return true;
     }
+
+    public async Task<BookingStats> GetStatsAsync(
+        long masterUserId, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    {
+        var bookings = await _db.Bookings
+            .Where(b => b.UserId == masterUserId
+                     && b.StartsAt >= fromUtc
+                     && b.StartsAt < toUtc)
+            .ToListAsync(ct);
+
+        return new BookingStats
+        {
+            Total = bookings.Count,
+            Completed = bookings.Count(b => b.Status == "completed"),
+            NoShow = bookings.Count(b => b.Status == "no_show"),
+            CancelledByClient = bookings.Count(b => b.Status == "cancelled_by_client"),
+            CancelledByMaster = bookings.Count(b => b.Status == "cancelled_by_master"),
+            Upcoming = bookings.Count(b => b.Status == "pending" || b.Status == "confirmed"),
+            RevenueRub = bookings.Where(b => b.Status == "completed").Sum(b => b.PriceRub)
+        };
+    }
 }
