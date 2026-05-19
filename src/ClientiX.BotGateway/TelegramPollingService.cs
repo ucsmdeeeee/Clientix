@@ -340,6 +340,18 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        if (data.StartsWith("master_complete:"))
+        {
+            await HandleMasterCompleteBookingAsync(bot, callback, "completed", ct);
+            return;
+        }
+
+        if (data.StartsWith("master_noshow:"))
+        {
+            await HandleMasterCompleteBookingAsync(bot, callback, "no_show", ct);
+            return;
+        }
+
         if (data == "noop")
         {
             return;
@@ -1887,6 +1899,7 @@ public class TelegramPollingService : BackgroundService
 
         var allServices = await users.GetServicesAsync(user.Id, ct);
         var masterTz = user.TimeZone;
+        var nowUtc = DateTime.UtcNow;
 
         var text = $"📒 Активные записи: {bookings.Count}\n\n" +
             string.Join("\n\n", bookings.Select(b =>
@@ -1900,7 +1913,9 @@ public class TelegramPollingService : BackgroundService
                 var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.StartsAt, masterTz);
                 var endLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.EndsAt, masterTz);
                 var servicesList = FormatBookingServicesList(b, allServices);
+                var passedMark = b.EndsAt < nowUtc ? "⏳ ПРОШЛА — отметьте статус\n" : "";
                 return
+                    passedMark +
                     $"📅 {startLocal:dd.MM} в {startLocal:HH:mm}–{endLocal:HH:mm}\n" +
                     $"💼 {servicesList}, {b.PriceRub} руб.\n" +
                     $"👤 {clientName}{clientUsername}";
@@ -1909,50 +1924,68 @@ public class TelegramPollingService : BackgroundService
         text += "\n\nНажмите на запись ниже, чтобы отменить.";
 
         var buttons = new List<InlineKeyboardButton[]>();
+        
+
         foreach (var b in bookings.Take(10))
         {
             var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(b.StartsAt, masterTz);
+            bool isPast = b.EndsAt < nowUtc;
 
             int servicesCount = 1;
             if (!string.IsNullOrEmpty(b.AdditionalServiceIds))
                 servicesCount += b.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries).Length;
 
-            buttons.Add(new[]
+            if (isPast)
             {
-        InlineKeyboardButton.WithCallbackData(
-            $"➕ Доп. услуга {startLocal:dd.MM HH:mm}",
-            $"master_add_service:{b.Id}")
-    });
-
-            if (servicesCount > 1)
-            {
+                // Прошедшая запись — кнопки для завершения
                 buttons.Add(new[]
                 {
             InlineKeyboardButton.WithCallbackData(
-                $"➖ Убрать услугу {startLocal:dd.MM HH:mm}",
-                $"master_remove_service:{b.Id}")
+                $"✅ Выполнено {startLocal:dd.MM HH:mm}",
+                $"master_complete:{b.Id}")
+        });
+                buttons.Add(new[]
+                {
+            InlineKeyboardButton.WithCallbackData(
+                $"🕳 Не пришёл {startLocal:dd.MM HH:mm}",
+                $"master_noshow:{b.Id}")
         });
             }
-
-            buttons.Add(new[]
+            else
             {
-        InlineKeyboardButton.WithCallbackData(
-            $"🔄 Перенести {startLocal:dd.MM HH:mm}",
-            $"master_reschedule:{b.Id}")
-    });
+                // Активная запись — управление
+                buttons.Add(new[]
+                {
+            InlineKeyboardButton.WithCallbackData(
+                $"➕ Доп. услуга {startLocal:dd.MM HH:mm}",
+                $"master_add_service:{b.Id}")
+        });
 
-            buttons.Add(new[]
-            {
-        InlineKeyboardButton.WithCallbackData(
-            $"🚫 Отменить {startLocal:dd.MM HH:mm}",
-            $"master_cancel_booking:{b.Id}")
-    });
+                if (servicesCount > 1)
+                {
+                    buttons.Add(new[]
+                    {
+                InlineKeyboardButton.WithCallbackData(
+                    $"➖ Убрать услугу {startLocal:dd.MM HH:mm}",
+                    $"master_remove_service:{b.Id}")
+            });
+                }
+
+                buttons.Add(new[]
+                {
+            InlineKeyboardButton.WithCallbackData(
+                $"🔄 Перенести {startLocal:dd.MM HH:mm}",
+                $"master_reschedule:{b.Id}")
+        });
+
+                buttons.Add(new[]
+                {
+            InlineKeyboardButton.WithCallbackData(
+                $"🚫 Отменить {startLocal:dd.MM HH:mm}",
+                $"master_cancel_booking:{b.Id}")
+        });
+            }
         }
-        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("« Назад в кабинет", "cabinet") });
-
-        await bot.SendMessage(chatId, text,
-            replyMarkup: new InlineKeyboardMarkup(buttons),
-            cancellationToken: ct);
     }
 
     private async Task HandleMasterCancelBookingAsync(
@@ -3275,5 +3308,49 @@ public class TelegramPollingService : BackgroundService
         await users.UpdateReminderExtraHoursAsync(callback.From.Id, hours, ct);
 
         await SendRemindersMenuAsync(bot, callback.Message!.Chat.Id, callback.From.Id, ct);
+    }
+
+    private async Task HandleMasterCompleteBookingAsync(
+    ITelegramBotClient bot, CallbackQuery callback, string newStatus, CancellationToken ct)
+    {
+        await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        var prefix = newStatus == "completed" ? "master_complete:" : "master_noshow:";
+        if (!long.TryParse(callback.Data!.Replace(prefix, ""), out var bookingId)) return;
+
+        var chatId = callback.Message!.Chat.Id;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
+        if (user is null) return;
+
+        var booking = await users.GetBookingByIdAsync(bookingId, ct);
+        if (booking is null || booking.UserId != user.Id)
+        {
+            await bot.SendMessage(chatId, "Запись не найдена.", cancellationToken: ct);
+            return;
+        }
+
+        var ok = await users.CompleteBookingAsync(bookingId, newStatus, ct);
+        if (!ok)
+        {
+            await bot.SendMessage(chatId, "Не удалось изменить статус.", cancellationToken: ct);
+            return;
+        }
+
+        var startLocal = ClientiX.Infrastructure.TimeZones.ToZone(booking.StartsAt, user.TimeZone);
+        var label = newStatus == "completed" ? "✅ Выполнена" : "🕳 Клиент не пришёл";
+
+        await bot.SendMessage(chatId,
+            $"{label}: {startLocal:dd.MM в HH:mm}, {booking.Service.Name}",
+            cancellationToken: ct);
+
+        _logger.LogInformation(
+            "Мастер отметил запись id={BookingId} как {Status}",
+            bookingId, newStatus);
+
+        // Возврат к списку
+        await SendMasterBookingsAsync(bot, chatId, callback.From.Id, ct);
     }
 }

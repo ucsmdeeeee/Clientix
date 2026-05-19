@@ -1,6 +1,10 @@
 ﻿using ClientiX.Domain.Entities;
 using ClientiX.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.Tasks;
+using System.Threading;
+using System;
+using System.Collections.Generic;
 
 namespace ClientiX.Infrastructure.Repositories;
 
@@ -455,13 +459,13 @@ public class UserRepository
     /// Список активных и будущих записей мастера.
     /// </summary>
     public async Task<List<Booking>> GetMasterBookingsAsync(
-        long masterUserId, CancellationToken ct)
+    long masterUserId, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
+        // Активные: будущие записи + прошедшие, которые ещё не завершены/не отменены
         return await _db.Bookings
             .Include(b => b.Service)
             .Where(b => b.UserId == masterUserId
-                     && b.EndsAt >= now
                      && (b.Status == "pending" || b.Status == "confirmed"))
             .OrderBy(b => b.StartsAt)
             .ToListAsync(ct);
@@ -656,5 +660,19 @@ public class UserRepository
         user.ReminderExtraHours = hours;
         user.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task<bool> CompleteBookingAsync(
+    long bookingId, string newStatus, CancellationToken ct)
+    {
+        if (newStatus != "completed" && newStatus != "no_show") return false;
+
+        var booking = await _db.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId, ct);
+        if (booking is null) return false;
+
+        booking.Status = newStatus;
+        booking.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return true;
     }
 }

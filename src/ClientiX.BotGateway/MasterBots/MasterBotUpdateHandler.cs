@@ -723,9 +723,12 @@ public class MasterBotUpdateHandler
 
         var endTime = slot.AddMinutes(duration);
 
+        var masterTz = state.Data.GetValueOrDefault("master_tz", "Europe/Moscow");
+        var slotLocal = ClientiX.Infrastructure.TimeZones.ToZone(slot, masterTz);
+
         var text = "📋 Проверьте запись:\n\n" +
                    $"📅 Дата: {slot:dddd, dd MMMM yyyy}\n" +
-                   $"🕐 Время: {slot:HH:mm} – {endTime:HH:mm}\n" +
+                   $"🕐 Время: {slotLocal:dddd, dd MMMM} в {slotLocal:HH:mm}\n" +
                    $"💼 Услуга: {serviceName}\n" +
                    $"⏱ Длительность: {duration} мин\n" +
                    $"💰 Стоимость: {price} руб.\n\n" +
