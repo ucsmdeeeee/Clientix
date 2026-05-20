@@ -1,4 +1,5 @@
-﻿using ClientiX.Infrastructure.Persistence;
+﻿using ClientiX.Domain.Entities;
+using ClientiX.Infrastructure.Persistence;
 using ClientiX.Infrastructure.Repositories;
 using ClientiX.Infrastructure.State;
 using Microsoft.EntityFrameworkCore;
@@ -170,6 +171,22 @@ public class MasterBotUpdateHandler
 
         await bot.SendMessage(message.Chat.Id, greeting,
             replyMarkup: keyboard, cancellationToken: ct);
+
+        // Постоянное меню снизу
+        var bottomMenu = new ReplyKeyboardMarkup(new[]
+        {
+            new KeyboardButton[] { "📅 Записаться", "📒 Мои записи" },
+            new KeyboardButton[] { "📋 Услуги", "🖼 Портфолио" }
+        })
+        {
+            ResizeKeyboard = true,
+            IsPersistent = true
+        };
+
+        await bot.SendMessage(message.Chat.Id,
+            "Быстрое меню снизу 👇",
+            replyMarkup: bottomMenu,
+            cancellationToken: ct);
     }
 
     private static bool IsTransient(Exception? ex)
@@ -961,10 +978,39 @@ public class MasterBotUpdateHandler
     }
 
     private async Task HandleClientTextAsync(
-        MasterBotContext ctx, ITelegramBotClient bot, Message message, CancellationToken ct)
+    MasterBotContext ctx, ITelegramBotClient bot, Message message, CancellationToken ct)
     {
-        // У клиентов бота мастера пока нет FSM-шагов с вводом текста.
-        // На всякий случай — если кто-то напишет произвольный текст — просто покажем меню.
+        if (message.From is null) return;
+
+        var text = message.Text?.Trim() ?? "";
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+
+        if (text == "📅 Записаться")
+        {
+            await StartBookingFlowAsync(ctx, bot, message.Chat.Id, message.From.Id, users, ct);
+            return;
+        }
+
+        if (text == "📒 Мои записи")
+        {
+            await SendClientBookingsAsync(ctx, bot, message.Chat.Id, message.From.Id, users, ct);
+            return;
+        }
+
+        if (text == "📋 Услуги")
+        {
+            await SendServicesAsync(bot, message.Chat.Id, ctx.UserId, users, ct);
+            return;
+        }
+
+        if (text == "🖼 Портфолио")
+        {
+            await SendPortfolioAsync(bot, message.Chat.Id, ctx, users, ct);
+            return;
+        }
+
         await bot.SendMessage(
             chatId: message.Chat.Id,
             text: "Нажмите /start, чтобы открыть меню записи.",
@@ -1764,6 +1810,15 @@ public class MasterBotUpdateHandler
 
         var bookingBefore = await users.GetBookingByIdAsync(bookingId, ct);
         if (bookingBefore is null || bookingBefore.ClientTelegramId != clientTgId) return;
+
+        if (CountServicesInBooking(bookingBefore) >= MaxServicesPerBooking)
+        {
+            await bot.SendMessage(chatId,
+                $"🚫 В записи уже {MaxServicesPerBooking} услуг — это максимум.\n" +
+                "Если нужно больше — создайте отдельную запись.",
+                cancellationToken: ct);
+            return;
+        }
 
         var ok = await users.AddServiceToBookingAsync(bookingId, serviceId, ct);
         if (!ok)

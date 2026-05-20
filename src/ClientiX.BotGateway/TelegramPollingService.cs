@@ -511,6 +511,36 @@ public class TelegramPollingService : BackgroundService
             return;
         }
 
+        var text = message.Text?.Trim() ?? "";
+
+        // Кнопки постоянного меню — работают только когда мастер не в FSM
+        if (state is null || string.IsNullOrEmpty(state.CurrentStep))
+        {
+            if (text == "📊 Мой кабинет")
+            {
+                await SendCabinetAsync(bot, message.Chat.Id, message.From!.Id, ct);
+                return;
+            }
+
+            if (text == "💎 Подписка")
+            {
+                await SendSubscriptionInfoAsync(bot, message.Chat.Id, message.From!.Id, ct);
+                return;
+            }
+
+            if (text == "❓ Помощь")
+            {
+                await bot.SendMessage(message.Chat.Id,
+                    "ℹ️ Помощь\n\n" +
+                    "▪️ /start — главное меню\n" +
+                    "▪️ 📊 Мой кабинет — управление профилем, услугами, расписанием, записями\n" +
+                    "▪️ 💎 Подписка — статус и оплата подписки\n" +
+                    "▪️ Если что-то не работает — напишите @ucsmdeeeee",
+                    cancellationToken: ct);
+                return;
+            }
+        }
+
         switch (state.CurrentStep)
         {
             case "city":
@@ -665,6 +695,22 @@ public class TelegramPollingService : BackgroundService
     });
 
         await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
+
+        // Постоянное меню снизу
+        var bottomMenu = new ReplyKeyboardMarkup(new[]
+        {
+        new KeyboardButton[] { "📊 Мой кабинет" },
+        new KeyboardButton[] { "💎 Подписка", "❓ Помощь" }
+    })
+        {
+            ResizeKeyboard = true,
+            IsPersistent = true
+        };
+
+        await bot.SendMessage(chatId,
+            "Быстрое меню снизу 👇",
+            replyMarkup: bottomMenu,
+            cancellationToken: ct);
     }
 
     private static string GetStatusEmoji(string? status) => status switch
@@ -2716,6 +2762,15 @@ public class TelegramPollingService : BackgroundService
 
         var booking = await users.GetBookingByIdAsync(bookingId, ct);
         if (booking is null || booking.UserId != user.Id) return;
+
+        if (CountServicesInBooking(booking) >= MaxServicesPerBooking)
+        {
+            await bot.SendMessage(chatId,
+                $"🚫 В записи уже {MaxServicesPerBooking} услуг — это максимум.\n" +
+                "Создайте клиенту отдельную запись если нужно ещё.",
+                cancellationToken: ct);
+            return;
+        }
 
         var ok = await users.AddServiceToBookingAsync(bookingId, serviceId, ct);
         if (!ok)
