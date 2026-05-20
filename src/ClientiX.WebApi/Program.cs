@@ -7,6 +7,9 @@ using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using StackExchange.Redis;
 using System.Text;
+using System.IdentityModel.Tokens.Jwt;
+
+JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
 
 var builder = WebApplication.CreateBuilder(args);
 
