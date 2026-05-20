@@ -20,3 +20,13 @@ public record AuthResponseDto
     public string? Username { get; init; }
     public bool IsAdmin { get; init; }
 }
+
+public record GenerateWebTokenDto
+{
+    public long TelegramId { get; init; }
+}
+
+public record ExchangeTokenDto
+{
+    public string ShortToken { get; init; } = null!;
+}

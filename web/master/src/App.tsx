@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { isLoggedIn } from './lib/api';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -13,6 +14,7 @@ function App() {
         <BrowserRouter basename="/app">
             <Routes>
                 <Route path="/" element={isLoggedIn() ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
+                <Route path="/auth" element={<AuthCallbackPage />} />
                 <Route
                     path="/dashboard"
                     element={

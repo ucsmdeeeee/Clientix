@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 using DomainUser = ClientiX.Domain.Entities.User;
 using static ClientiX.Infrastructure.Repositories.UserRepository;
+using System.Text.Json;
 
 namespace ClientiX.BotGateway;
 
@@ -121,6 +122,13 @@ public class TelegramPollingService : BackgroundService
         ITelegramBotClient bot, Message message, CancellationToken ct)
     {
         if (message.From is null) return;
+
+        // Проверка deep-link: /start login → выдать веб-токен и отправить ссылку
+        if (message.Text != null && message.Text.StartsWith("/start login", StringComparison.Ordinal))
+        {
+            await HandleWebLoginAsync(bot, message, ct);
+            return;
+        }
 
         using var scope = _scopeFactory.CreateScope();
         var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
@@ -3531,4 +3539,79 @@ public class TelegramPollingService : BackgroundService
     }
 
     private const int MaxServicesPerBooking = 5;
+
+    private async Task HandleWebLoginAsync(
+    ITelegramBotClient bot, Message message, CancellationToken ct)
+    {
+        if (message.From is null) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+        var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+        var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+
+        // Проверим что юзер зарегистрирован
+        var user = await users.GetByTelegramIdAsync(message.From.Id, ct);
+        if (user is null)
+        {
+            await bot.SendMessage(
+                chatId: message.Chat.Id,
+                text: "Сначала зарегистрируйся в боте — отправь /start. Потом возвращайся за входом в веб.",
+                cancellationToken: ct);
+            return;
+        }
+
+        // Зовём WebApi за токеном
+        var http = httpFactory.CreateClient();
+        var baseUrl = config["WebApi:BaseUrl"] ?? "http://webapi:5050";
+        var secret = config["WebApi:InternalSecret"];
+
+        if (string.IsNullOrEmpty(secret))
+        {
+            _logger.LogError("WebApi:InternalSecret не настроен");
+            await bot.SendMessage(message.Chat.Id,
+                "Веб-вход временно недоступен. Сообщи об этом @ucsmdeeeee.",
+                cancellationToken: ct);
+            return;
+        }
+
+        http.DefaultRequestHeaders.Add("X-Internal-Secret", secret);
+
+        try
+        {
+            var response = await http.PostAsJsonAsync(
+                $"{baseUrl}/api/auth/generate-web-token",
+                new { TelegramId = message.From.Id },
+                ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("WebApi generate-web-token failed: {Status}", response.StatusCode);
+                await bot.SendMessage(message.Chat.Id,
+                    "Не удалось создать ссылку. Попробуй позже.",
+                    cancellationToken: ct);
+                return;
+            }
+
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            var token = json.GetProperty("token").GetString();
+
+            var url = $"https://clientix-assist.ru/app/auth?t={token}";
+
+            await bot.SendMessage(
+                chatId: message.Chat.Id,
+                text: $"🔐 Вход в кабинет\n\nСсылка действительна 5 минут:\n{url}",
+                linkPreviewOptions: new Telegram.Bot.Types.LinkPreviewOptions { IsDisabled = true },
+                cancellationToken: ct);
+
+            _logger.LogInformation("Веб-вход: выдан токен мастеру {UserId}", user.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка генерации веб-токена для {TgId}", message.From.Id);
+            await bot.SendMessage(message.Chat.Id,
+                "Ошибка входа. Попробуй позже.",
+                cancellationToken: ct);
+        }
+    }
 }

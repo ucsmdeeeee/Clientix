@@ -80,6 +80,7 @@ builder.Services.AddSingleton<MasterBotManager>();
 builder.Services.AddHostedService<MasterBotsHostedService>();
 builder.Services.AddHostedService<ReminderHostedService>();
 builder.Services.AddSingleton<ClientiX.Infrastructure.RateLimit.RateLimitService>();
+builder.Services.AddHttpClient();
 
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ClientiX.Infrastructure.Payments.YooKassaPaymentService>();

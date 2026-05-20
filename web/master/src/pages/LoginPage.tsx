@@ -108,14 +108,35 @@ export function LoginPage() {
                                 <p className="mt-4 text-sm" style={{ color: '#A8A8A8' }}>Авторизуем...</p>
                             </div>
                         ) : (
-                            <TelegramLoginButton botName={BOT_NAME} onAuth={handleTelegramAuth}
-                                buttonSize="large" cornerRadius={4} />
-                        )}
-                        {error && (
-                            <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                                className="text-sm text-center" style={{ color: '#F87171' }}>
-                                {error}
-                            </motion.p>
+                            <>
+                                <TelegramLoginButton
+                                    botName={BOT_NAME}
+                                    onAuth={handleTelegramAuth}
+                                    buttonSize="large"
+                                    cornerRadius={4}
+                                />
+                                <div
+                                    className="w-full flex items-center gap-3"
+                                    style={{ color: '#6B6B6B' }}
+                                >
+                                    <div className="flex-1 h-px" style={{ background: '#1F1F26' }} />
+                                    <span className="text-[10px] tracking-widest uppercase">или</span>
+                                    <div className="flex-1 h-px" style={{ background: '#1F1F26' }} />
+                                </div>
+                                <motion.a
+                                    href="https://t.me/cl1ent1x_bot?start=login"
+                                    whileHover={{ scale: 1.02, boxShadow: '0 0 30px rgba(232,232,232,0.3)' }}
+                                    whileTap={{ scale: 0.98 }}
+                                    className="group w-full flex items-center justify-center gap-3 px-8 py-3 font-medium tracking-wide"
+                                    style={{
+                                        background: `linear-gradient(135deg, ${PLATINUM} 0%, #F5F5F5 100%)`,
+                                        color: '#000000',
+                                        borderRadius: '2px',
+                                    }}
+                                >
+                                    Открыть в Telegram →
+                                </motion.a>
+                            </>
                         )}
                     </div>
                     <div className="mt-8 pt-6 border-t text-center text-xs tracking-wider uppercase"

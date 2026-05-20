@@ -33,4 +33,28 @@ public class JwtService
 
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
+
+    public string GenerateShortLivedToken(long userId, long telegramId, bool isAdmin)
+    {
+        var secret = _config["Jwt:Secret"]!;
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+    {
+        new("sub", userId.ToString()),
+        new("tg_id", telegramId.ToString()),
+        new("is_admin", isAdmin.ToString().ToLowerInvariant()),
+        new("type", "web_login")
+    };
+
+        var token = new JwtSecurityToken(
+            issuer: _config["Jwt:Issuer"],
+            audience: _config["Jwt:Audience"],
+            claims: claims,
+            expires: DateTime.UtcNow.AddMinutes(5),
+            signingCredentials: creds);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
 }
