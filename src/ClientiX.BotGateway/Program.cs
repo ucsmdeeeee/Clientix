@@ -3,6 +3,7 @@ using ClientiX.Infrastructure.Persistence;
 using ClientiX.Infrastructure.Repositories;
 using ClientiX.Infrastructure.State;
 using ClientiX.Infrastructure.Security;
+using ClientiX.Infrastructure.RateLimit;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using StackExchange.Redis;
@@ -71,6 +72,7 @@ builder.Services.AddSingleton<MasterBotUpdateHandler>();
 builder.Services.AddSingleton<MasterBotManager>();
 builder.Services.AddHostedService<MasterBotsHostedService>();
 builder.Services.AddHostedService<ReminderHostedService>();
+builder.Services.AddSingleton<ClientiX.Infrastructure.RateLimit.RateLimitService>();
 
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ClientiX.Infrastructure.Payments.YooKassaPaymentService>();

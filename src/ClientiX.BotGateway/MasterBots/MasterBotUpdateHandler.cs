@@ -536,6 +536,8 @@ public class MasterBotUpdateHandler
             return;
         }
 
+        if (!await CheckRateLimitBookingAsync(bot, chatId, clientTelegramId, ct)) return;
+
         // Сохраняем состояние бронирования в Redis под ключ "fsm:user:{clientTelegramId}"
         var state = new UserState
         {
@@ -758,6 +760,35 @@ public class MasterBotUpdateHandler
         {
             await bot.SendMessage(chatId,
                 "Сессия записи устарела. Нажмите /start, чтобы начать заново.",
+                cancellationToken: ct);
+            return;
+        }
+
+        using var scopeRl = _scopeFactory.CreateScope();
+        var rateLimit = scopeRl.ServiceProvider
+            .GetRequiredService<ClientiX.Infrastructure.RateLimit.RateLimitService>();
+
+        // Лимит частоты: 5 операций бронирования в минуту с одного аккаунта
+        var canProceed = await rateLimit.TryAcquireAsync(
+            $"book:{clientTgId}", maxRequests: 5, windowSeconds: 60);
+
+        if (!canProceed)
+        {
+            await bot.SendMessage(chatId,
+                "⚠️ Слишком много операций. Подождите минуту и попробуйте снова.",
+                cancellationToken: ct);
+            return;
+        }
+
+        // Лимит количества активных записей у клиента к этому мастеру
+        var usersRl = scopeRl.ServiceProvider.GetRequiredService<UserRepository>();
+        var activeCount = await usersRl.CountActiveClientBookingsAsync(clientTgId, ctx.UserId, ct);
+
+        if (activeCount >= 3)
+        {
+            await bot.SendMessage(chatId,
+                "🚫 У вас уже 3 активные записи к этому мастеру.\n" +
+                "Подождите, пока пройдёт одна из них, или отмените лишнюю.",
                 cancellationToken: ct);
             return;
         }
@@ -1255,6 +1286,8 @@ public class MasterBotUpdateHandler
     {
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
+        if (!await CheckRateLimitBookingAsync(bot, callback.Message!.Chat.Id, callback.From.Id, ct)) return;
+
         if (!long.TryParse(callback.Data!.Replace("client_reschedule:", ""), out var bookingId))
             return;
 
@@ -1598,6 +1631,8 @@ public class MasterBotUpdateHandler
     {
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
+        if (!await CheckRateLimitBookingAsync(bot, callback.Message!.Chat.Id, callback.From.Id, ct)) return;
+
         if (!long.TryParse(callback.Data!.Replace("client_add_service:", ""), out var bookingId))
             return;
 
@@ -1803,6 +1838,8 @@ public class MasterBotUpdateHandler
     {
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
+        if (!await CheckRateLimitBookingAsync(bot, callback.Message!.Chat.Id, callback.From.Id, ct)) return;
+
         if (!long.TryParse(callback.Data!.Replace("client_remove_service:", ""), out var bookingId))
             return;
 
@@ -1954,5 +1991,28 @@ public class MasterBotUpdateHandler
         {
             _logger.LogWarning(ex, "Не удалось уведомить мастера об удалении услуги");
         }
+    }
+
+    /// <summary>
+    /// Проверяет частотный лимит: не больше 5 операций бронирования в минуту.
+    /// При нарушении — отвечает пользователю и возвращает false.
+    /// </summary>
+    private async Task<bool> CheckRateLimitBookingAsync(
+        ITelegramBotClient bot, long chatId, long clientTgId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var rateLimit = scope.ServiceProvider
+            .GetRequiredService<ClientiX.Infrastructure.RateLimit.RateLimitService>();
+
+        var ok = await rateLimit.TryAcquireAsync(
+            $"book:{clientTgId}", maxRequests: 5, windowSeconds: 60);
+
+        if (!ok)
+        {
+            await bot.SendMessage(chatId,
+                "⚠️ Слишком много операций. Подождите минуту и попробуйте снова.",
+                cancellationToken: ct);
+        }
+        return ok;
     }
 }

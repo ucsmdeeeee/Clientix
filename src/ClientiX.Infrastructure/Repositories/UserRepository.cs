@@ -696,4 +696,16 @@ public class UserRepository
             RevenueRub = bookings.Where(b => b.Status == "completed").Sum(b => b.PriceRub)
         };
     }
+
+    public async Task<int> CountActiveClientBookingsAsync(
+    long clientTelegramId, long masterUserId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return await _db.Bookings
+            .Where(b => b.ClientTelegramId == clientTelegramId
+                     && b.UserId == masterUserId
+                     && b.EndsAt >= now
+                     && (b.Status == "pending" || b.Status == "confirmed"))
+            .CountAsync(ct);
+    }
 }
