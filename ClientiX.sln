@@ -23,7 +23,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.BotGateway", "src\
 		{47F4089B-6F8B-4245-865A-862ADDC5F3CD} = {47F4089B-6F8B-4245-865A-862ADDC5F3CD}
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.Core", "src\ClientiX.Core\ClientiX.Core.csproj", "{ED540E62-319E-499B-B7FD-E59FE638720A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.WebApi", "src\ClientiX.WebApi\ClientiX.WebApi.csproj", "{ED540E62-319E-499B-B7FD-E59FE638720A}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "_root", "_root", "{36D591C7-65C7-A0D1-1CBC-10CDE441BDC8}"
 	ProjectSection(SolutionItems) = preProject

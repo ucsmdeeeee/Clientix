@@ -491,4 +491,7 @@ obj/
 appsettings.Development.json
 appsettings.*.local.json
 
+**/appsettings.Production.json
+**/appsettings.Development.json
+
 .keys/
