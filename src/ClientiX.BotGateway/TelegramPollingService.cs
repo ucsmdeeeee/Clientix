@@ -84,6 +84,10 @@ public class TelegramPollingService : BackgroundService
                     {
                         await HandleStartAsync(bot, message, ct);
                     }
+                    else if (message.Text.StartsWith("/login", StringComparison.Ordinal))
+                    {
+                        await HandleWebLoginAsync(bot, message, ct);
+                    }
                     else
                     {
                         await HandleTextMessageAsync(bot, message, ct);
