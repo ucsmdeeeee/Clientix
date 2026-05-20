@@ -1976,12 +1976,15 @@ public class TelegramPollingService : BackgroundService
             else
             {
                 // Активная запись — управление
-                buttons.Add(new[]
+                if (CountServicesInBooking(b) < MaxServicesPerBooking)
                 {
-            InlineKeyboardButton.WithCallbackData(
-                $"➕ Доп. услуга {startLocal:dd.MM HH:mm}",
-                $"master_add_service:{b.Id}")
-        });
+                    buttons.Add(new[]
+                    {
+        InlineKeyboardButton.WithCallbackData(
+            $"➕ Доп. услуга {startLocal:dd.MM HH:mm}",
+            $"master_add_service:{b.Id}")
+    });
+                }
 
                 if (servicesCount > 1)
                 {
@@ -2630,6 +2633,15 @@ public class TelegramPollingService : BackgroundService
         if (booking is null || booking.UserId != user.Id)
         {
             await bot.SendMessage(chatId, "Запись не найдена.", cancellationToken: ct);
+            return;
+        }
+
+        if (CountServicesInBooking(booking) >= MaxServicesPerBooking)
+        {
+            await bot.SendMessage(chatId,
+                $"🚫 В записи уже {MaxServicesPerBooking} услуг — это максимум.\n" +
+                "Создайте клиенту отдельную запись если нужно ещё.",
+                cancellationToken: ct);
             return;
         }
 
@@ -3455,4 +3467,16 @@ public class TelegramPollingService : BackgroundService
             replyMarkup: keyboard,
             cancellationToken: ct);
     }
+
+    private static int CountServicesInBooking(Domain.Entities.Booking booking)
+    {
+        int count = 1;
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            count += booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+        return count;
+    }
+
+    private const int MaxServicesPerBooking = 5;
 }

@@ -971,18 +971,6 @@ public class MasterBotUpdateHandler
             cancellationToken: ct);
     }
 
-    private static string GetRussianDayShort(DayOfWeek day) => day switch
-    {
-        DayOfWeek.Monday => "пн",
-        DayOfWeek.Tuesday => "вт",
-        DayOfWeek.Wednesday => "ср",
-        DayOfWeek.Thursday => "чт",
-        DayOfWeek.Friday => "пт",
-        DayOfWeek.Saturday => "сб",
-        DayOfWeek.Sunday => "вс",
-        _ => "?"
-    };
-
     private async Task SendClientBookingsAsync(
     MasterBotContext ctx, ITelegramBotClient bot, long chatId, long clientTelegramId,
     UserRepository users, CancellationToken ct)
@@ -1030,12 +1018,15 @@ public class MasterBotUpdateHandler
             if (!string.IsNullOrEmpty(b.AdditionalServiceIds))
                 servicesCount += b.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries).Length;
 
-            buttons.Add(new[]
+            if (CountServicesInBooking(b) < MaxServicesPerBooking)
             {
+                buttons.Add(new[]
+                {
         InlineKeyboardButton.WithCallbackData(
             $"➕ Доп. услуга {startLocal:dd.MM HH:mm}",
             $"client_add_service:{b.Id}")
     });
+            }
 
             // Кнопка удаления услуги только если их больше одной
             if (servicesCount > 1)
@@ -1683,6 +1674,19 @@ public class MasterBotUpdateHandler
             return;
         }
 
+        if (CountServicesInBooking(booking) >= MaxServicesPerBooking)
+        {
+            await bot.SendMessage(chatId,
+                $"🚫 В одной записи можно совместить максимум {MaxServicesPerBooking} услуг.\n\n" +
+                "Если нужно ещё — создайте отдельную запись.",
+                replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+            new[] { InlineKeyboardButton.WithCallbackData("« К записям", "client_my_bookings") }
+                }),
+                cancellationToken: ct);
+            return;
+        }
+
         var master = await users.GetByIdAsync(ctx.UserId, ct);
         var masterTz = master?.TimeZone ?? "Europe/Moscow";
 
@@ -2047,4 +2051,16 @@ public class MasterBotUpdateHandler
         }
         return ok;
     }
+
+    private static int CountServicesInBooking(Domain.Entities.Booking booking)
+    {
+        int count = 1; // основная
+        if (!string.IsNullOrEmpty(booking.AdditionalServiceIds))
+        {
+            count += booking.AdditionalServiceIds.Split(',', StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+        return count;
+    }
+
+    private const int MaxServicesPerBooking = 5;
 }
