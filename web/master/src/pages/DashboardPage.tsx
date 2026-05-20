@@ -1,6 +1,5 @@
 ﻿import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { CheckCircle, XCircle, AlertCircle, TrendingUp, LogOut } from 'lucide-react';
 import {
     LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -13,7 +12,6 @@ import logo from '../assets/logo.jpg';
 const PLATINUM = '#E8E8E8';
 
 export function DashboardPage() {
-    const navigate = useNavigate();
     const [me, setMe] = useState<MasterMe | null>(null);
     const [stats, setStats] = useState<MasterStats | null>(null);
     const [loading, setLoading] = useState(true);
