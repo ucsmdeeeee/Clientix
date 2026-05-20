@@ -11,7 +11,7 @@ const BOT_NAME = 'cl1ent1x_bot';
 
 export function LoginPage() {
     const navigate = useNavigate();
-    const [error, setError] = useState<string | null>(null);
+    const [, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
 
     const handleTelegramAuth = async (data: TelegramLoginData) => {
