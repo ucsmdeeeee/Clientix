@@ -720,4 +720,27 @@ public class UserRepository
         bot.IsActive = false;
         await _db.SaveChangesAsync(ct);
     }
+
+    /// <summary>
+    /// Проверяет, есть ли активные записи (pending/confirmed) с этой услугой:
+    /// либо как основная, либо в AdditionalServiceIds.
+    /// </summary>
+    public async Task<int> CountActiveBookingsWithServiceAsync(
+        long serviceId, CancellationToken ct)
+    {
+        var serviceIdStr = serviceId.ToString();
+
+        var count = await _db.Bookings
+            .Where(b => (b.Status == "pending" || b.Status == "confirmed")
+                     && b.EndsAt >= DateTime.UtcNow
+                     && (b.ServiceId == serviceId
+                         || (b.AdditionalServiceIds != null
+                             && (b.AdditionalServiceIds == serviceIdStr
+                                 || b.AdditionalServiceIds.StartsWith(serviceIdStr + ",")
+                                 || b.AdditionalServiceIds.EndsWith("," + serviceIdStr)
+                                 || b.AdditionalServiceIds.Contains("," + serviceIdStr + ",")))))
+            .CountAsync(ct);
+
+        return count;
+    }
 }

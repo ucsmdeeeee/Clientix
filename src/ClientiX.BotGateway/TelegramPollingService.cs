@@ -820,20 +820,36 @@ public class TelegramPollingService : BackgroundService
     }
 
     private async Task HandleDeleteServiceAsync(
-        ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
+    ITelegramBotClient bot, CallbackQuery callback, CancellationToken ct)
     {
         await bot.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
         if (!long.TryParse(callback.Data!.Replace("svc_del:", ""), out var serviceId))
             return;
 
+        var chatId = callback.Message!.Chat.Id;
+
         using var scope = _scopeFactory.CreateScope();
         var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
         var user = await users.GetByTelegramIdAsync(callback.From.Id, ct);
         if (user is null) return;
 
+        // Защита: нельзя удалить услугу, если на неё есть активные записи клиентов
+        var activeCount = await users.CountActiveBookingsWithServiceAsync(serviceId, ct);
+        if (activeCount > 0)
+        {
+            var word = activeCount == 1 ? "запись" : (activeCount < 5 ? "записи" : "записей");
+            var adjective = activeCount == 1 ? "активная" : "активных";
+            await bot.SendMessage(chatId,
+                $"🚫 Эту услугу нельзя удалить — на неё есть <b>{activeCount} {adjective} {word}</b>.\n\n" +
+                "Сначала завершите эти записи (отметьте «✅ Выполнено» / «🕳 Не пришёл» в «📒 Мои записи») " +
+                "или отмените их, и только потом удалите услугу.",
+                parseMode: ParseMode.Html,
+                cancellationToken: ct);
+            return;
+        }
+
         var ok = await users.SoftDeleteServiceAsync(user.Id, serviceId, ct);
-        var chatId = callback.Message!.Chat.Id;
 
         await bot.SendMessage(chatId,
             ok ? "🗑 Услуга удалена." : "Не удалось удалить услугу.",
