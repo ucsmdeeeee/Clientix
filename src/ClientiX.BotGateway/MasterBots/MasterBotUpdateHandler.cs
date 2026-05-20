@@ -67,9 +67,23 @@ public class MasterBotUpdateHandler
     }
 
     public async Task HandleErrorAsync(
-        MasterBotContext ctx, ITelegramBotClient bot, Exception exception,
-        HandleErrorSource source, CancellationToken ct)
+    MasterBotContext ctx, ITelegramBotClient bot, Exception exception,
+    HandleErrorSource source, CancellationToken ct)
     {
+        // Проверяем — это инвалидный токен / 401?
+        if (IsAuthError(exception))
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var manager = scope.ServiceProvider
+                .GetRequiredService<ClientiX.BotGateway.MasterBots.MasterBotManager>();
+
+            await manager.HandleBotFatalErrorAsync(
+                ctx.UserId,
+                $"Telegram отверг токен: {exception.Message}",
+                ct);
+            return;
+        }
+
         bool isTransient = IsTransient(exception);
 
         if (isTransient)
@@ -86,6 +100,24 @@ public class MasterBotUpdateHandler
                 ctx.BotUsername, source);
             await Task.Delay(TimeSpan.FromSeconds(3), ct);
         }
+    }
+
+    private static bool IsAuthError(Exception? ex)
+    {
+        while (ex is not null)
+        {
+            // Telegram.Bot выбрасывает ApiRequestException с ErrorCode = 401
+            if (ex is Telegram.Bot.Exceptions.ApiRequestException apiEx && apiEx.ErrorCode == 401)
+                return true;
+
+            // Старая версия библиотеки могла бросать с сообщением "Unauthorized"
+            if (ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("401"))
+                return true;
+
+            ex = ex.InnerException;
+        }
+        return false;
     }
 
     /// <summary>

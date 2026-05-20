@@ -708,4 +708,16 @@ public class UserRepository
                      && (b.Status == "pending" || b.Status == "confirmed"))
             .CountAsync(ct);
     }
+
+    /// <summary>
+    /// Деактивирует подключённого бота мастера (например, если токен инвалидный).
+    /// </summary>
+    public async Task DeactivateManagedBotAsync(long userId, CancellationToken ct)
+    {
+        var bot = await _db.ManagedBots.FirstOrDefaultAsync(b => b.UserId == userId, ct);
+        if (bot is null) return;
+
+        bot.IsActive = false;
+        await _db.SaveChangesAsync(ct);
+    }
 }

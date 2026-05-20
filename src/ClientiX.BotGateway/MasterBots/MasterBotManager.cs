@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using ClientiX.Infrastructure.Persistence;
+using ClientiX.Infrastructure.Repositories;
 using ClientiX.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
@@ -155,5 +156,50 @@ public class MasterBotManager
         }
         _bots.Clear();
         _logger.LogInformation("Все боты мастеров остановлены");
+    }
+
+    /// <summary>
+    /// Обработка фатальной ошибки бота: невалидный токен, бан и т.п.
+    /// Останавливаем поллинг, деактивируем в БД, уведомляем мастера.
+    /// </summary>
+    public async Task HandleBotFatalErrorAsync(long userId, string reason, CancellationToken ct = default)
+    {
+        _logger.LogWarning(
+            "Бот мастера user={UserId} помечен как недоступный: {Reason}",
+            userId, reason);
+
+        // Останавливаем поллинг
+        StopOne(userId);
+
+        using var scope = _scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserRepository>();
+
+        await users.DeactivateManagedBotAsync(userId, ct);
+
+        // Уведомляем мастера через главный бот
+        try
+        {
+            var mainBot = scope.ServiceProvider.GetRequiredService<ITelegramBotClient>();
+            var master = await users.GetByIdAsync(userId, ct);
+            if (master is not null)
+            {
+                await mainBot.SendMessage(
+                    chatId: master.TelegramId,
+                    text:
+                        "⚠️ Ваш бот мастера перестал работать.\n\n" +
+                        $"Причина: <i>{System.Net.WebUtility.HtmlEncode(reason)}</i>\n\n" +
+                        "Это могло произойти, если:\n" +
+                        "▪️ вы сменили токен в @BotFather\n" +
+                        "▪️ удалили или приостановили бота\n" +
+                        "▪️ забанили бота для главного процесса\n\n" +
+                        "Чтобы возобновить работу — отправьте /start и подключите бота заново.",
+                    parseMode: Telegram.Bot.Types.Enums.ParseMode.Html,
+                    cancellationToken: ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Не удалось уведомить мастера {UserId} о невалидном токене", userId);
+        }
     }
 }
