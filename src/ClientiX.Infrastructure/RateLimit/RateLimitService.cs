@@ -1,6 +1,7 @@
 ﻿using StackExchange.Redis;
 using System.Threading.Tasks;
 using System;
+using Microsoft.Extensions.Logging;
 
 namespace ClientiX.Infrastructure.RateLimit;
 
