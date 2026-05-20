@@ -25,9 +25,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.BotGateway", "src\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientiX.WebApi", "src\ClientiX.WebApi\ClientiX.WebApi.csproj", "{ED540E62-319E-499B-B7FD-E59FE638720A}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "_root", "_root", "{36D591C7-65C7-A0D1-1CBC-10CDE441BDC8}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dock", "dock", "{36D591C7-65C7-A0D1-1CBC-10CDE441BDC8}"
 	ProjectSection(SolutionItems) = preProject
-		docker-compose.yml = docker-compose.yml
+		..\..\..\clientix-configs\Caddyfile = ..\..\..\clientix-configs\Caddyfile
+		..\..\..\clientix-configs\docker-compose.yml = ..\..\..\clientix-configs\docker-compose.yml
+		..\..\..\clientix-configs\Dockerfile = ..\..\..\clientix-configs\Dockerfile
+		..\..\..\clientix-configs\Dockerfile.webapi = ..\..\..\clientix-configs\Dockerfile.webapi
+		Dockerfile.landing = Dockerfile.landing
 	EndProjectSection
 EndProject
 Global

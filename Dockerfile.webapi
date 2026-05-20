@@ -1,0 +1,12 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet publish src/ClientiX.WebApi/ClientiX.WebApi.csproj -c Release -o /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+COPY --from=build /app/publish .
+
+RUN mkdir -p /var/log/clientix-webapi && chmod 777 /var/log/clientix-webapi
+
+ENTRYPOINT ["dotnet", "ClientiX.WebApi.dll"]
