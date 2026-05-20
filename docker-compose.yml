@@ -77,6 +77,13 @@ services:
     container_name: clientix-landing
     restart: always
     
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile.master
+    container_name: clientix-master
+    restart: always
+    
   caddy:
     image: caddy:2-alpine
     container_name: clientix-caddy
