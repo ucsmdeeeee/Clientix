@@ -10,7 +10,7 @@ const PLATINUM_LIGHT = '#F5F5F5';
 export function Hero() {
     return (
         <section
-            className="relative min-h-screen flex items-center justify-center overflow-hidden"
+            className="relative min-h-screen flex items-center justify-center overflow-hidden py-20 md:py-0"
             style={{
                 background: 'radial-gradient(ellipse at top, #0D0D10 0%, #000000 70%)',
             }}
