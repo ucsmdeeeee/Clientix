@@ -7,7 +7,6 @@ clientix-assist.ru {
         reverse_proxy botgateway:5000
     }
 
-    # √лавна€ страница / + любые публичные пути > лендинг
     handle {
         reverse_proxy landing:80
     }

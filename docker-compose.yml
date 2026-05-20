@@ -1,16 +1,21 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16
     container_name: clientix-postgres
+    restart: always
     environment:
+      POSTGRES_DB: clientix
       POSTGRES_USER: clientix
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: clientix
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clientix -d clientix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -64,14 +69,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-  
+        
   landing:
     build:
       context: .
       dockerfile: Dockerfile.landing
     container_name: clientix-landing
     restart: always
-
+    
   caddy:
     image: caddy:2-alpine
     container_name: clientix-caddy
