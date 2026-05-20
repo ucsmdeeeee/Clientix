@@ -502,15 +502,6 @@ public class TelegramPollingService : BackgroundService
         if (message.From is null) return;
 
         var state = await _states.GetAsync(message.From.Id);
-
-        if (state is null)
-        {
-            await bot.SendMessage(message.Chat.Id,
-                "Я понимаю команду /start. Нажмите её, чтобы открыть меню.",
-                cancellationToken: ct);
-            return;
-        }
-
         var text = message.Text?.Trim() ?? "";
 
         // Кнопки постоянного меню — работают только когда мастер не в FSM
@@ -518,13 +509,13 @@ public class TelegramPollingService : BackgroundService
         {
             if (text == "📊 Мой кабинет")
             {
-                await SendCabinetAsync(bot, message.Chat.Id, message.From!.Id, ct);
+                await SendCabinetAsync(bot, message.Chat.Id, message.From.Id, ct);
                 return;
             }
 
             if (text == "💎 Подписка")
             {
-                await SendSubscriptionInfoAsync(bot, message.Chat.Id, message.From!.Id, ct);
+                await SendSubscriptionInfoAsync(bot, message.Chat.Id, message.From.Id, ct);
                 return;
             }
 
@@ -539,6 +530,12 @@ public class TelegramPollingService : BackgroundService
                     cancellationToken: ct);
                 return;
             }
+
+            // Нет FSM и не кнопка меню — обычный fallback
+            await bot.SendMessage(message.Chat.Id,
+                "Я понимаю команду /start. Нажмите её, чтобы открыть меню.",
+                cancellationToken: ct);
+            return;
         }
 
         switch (state.CurrentStep)
