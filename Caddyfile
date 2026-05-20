@@ -1,20 +1,18 @@
 clientix-assist.ru {
-    # API запросы → WebApi
     handle /api/* {
         reverse_proxy webapi:5050
     }
 
-    # Webhook ЮKassa → BotGateway
     handle /payments/* {
         reverse_proxy botgateway:5000
     }
 
-    # Кабинет мастера → master SPA
-    handle /app* {
+    redir /app /app/ permanent
+
+    handle_path /app/* {
         reverse_proxy master:80
     }
 
-    # Всё остальное → лендинг
     handle {
         reverse_proxy landing:80
     }
