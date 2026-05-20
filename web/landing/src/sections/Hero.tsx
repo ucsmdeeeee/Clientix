@@ -191,7 +191,7 @@ export function Hero() {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ duration: 1, delay: 2.3 }}
-                    className="mt-16 mb-20 md:mb-0 flex flex-wrap items-center justify-center gap-3 md:gap-6 text-xs tracking-widest uppercase"
+                    className="mt-16 flex items-center justify-center gap-6 text-xs tracking-widest uppercase"
                     style={{ color: '#6B6B6B' }}
                 >
                     <span>7 дней бесплатно</span>
