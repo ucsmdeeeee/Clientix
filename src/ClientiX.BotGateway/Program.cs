@@ -19,16 +19,23 @@ var ruCulture = new System.Globalization.CultureInfo("ru-RU");
 System.Globalization.CultureInfo.DefaultThreadCurrentCulture = ruCulture;
 System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = ruCulture;
 
-// Serilog
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
-    .Enrich.FromLogContext()
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
-    .CreateLogger();
-
-builder.Host.UseSerilog();
+// Логирование в файл через Serilog
+builder.Host.UseSerilog((context, services, configuration) =>
+{
+    configuration
+        .MinimumLevel.Information()
+        .MinimumLevel.Override("Microsoft.EntityFrameworkCore", Serilog.Events.LogEventLevel.Warning)
+        .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+        .Enrich.FromLogContext()
+        .WriteTo.Console(
+            outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+        .WriteTo.File(
+            path: "/var/log/clientix/clientix-.log",
+            rollingInterval: Serilog.RollingInterval.Day,
+            retainedFileCountLimit: 14,
+            outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+            shared: true);
+});
 
 // Telegram Bot Client
 builder.Services.AddSingleton<ITelegramBotClient>(_ =>
