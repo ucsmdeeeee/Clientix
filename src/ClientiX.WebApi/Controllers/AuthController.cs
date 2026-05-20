@@ -75,9 +75,9 @@ public class AuthController : ControllerBase
 
     [HttpPost("generate-web-token")]
     public async Task<IActionResult> GenerateWebToken(
-    [FromHeader(Name = "X-Internal-Secret")] string? secret,
-    [FromBody] GenerateWebTokenDto dto,
-    CancellationToken ct)
+        [FromHeader(Name = "X-Internal-Secret")] string? secret,
+        [FromBody] GenerateWebTokenDto dto,
+        CancellationToken ct)
     {
         var expectedSecret = _config["Internal:Secret"];
         if (string.IsNullOrEmpty(expectedSecret) || secret != expectedSecret)
@@ -109,13 +109,17 @@ public class AuthController : ControllerBase
 
     [HttpPost("exchange")]
     public async Task<IActionResult> ExchangeToken(
-    [FromBody] ExchangeTokenDto dto,
-    CancellationToken ct)
+        [FromBody] ExchangeTokenDto dto,
+        CancellationToken ct)
     {
         if (string.IsNullOrEmpty(dto.ShortToken))
             return BadRequest(new { error = "missing_token" });
 
+        // Отключаем automatic claim mapping для этого handler
+        // иначе "sub" будет перемаплен в ClaimTypes.NameIdentifier и FindFirst("sub") вернёт null
         var handler = new JwtSecurityTokenHandler();
+        handler.InboundClaimTypeMap.Clear();
+
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Secret"]!));
 
         try
@@ -134,16 +138,41 @@ public class AuthController : ControllerBase
 
             var tokenType = principal.FindFirst("type")?.Value;
             if (tokenType != "web_login")
+            {
+                _logger.LogWarning("Token exchange: wrong type='{Type}'", tokenType ?? "null");
                 return Unauthorized(new { error = "wrong_token_type" });
+            }
 
-            var userId = long.Parse(principal.FindFirst("sub")!.Value);
-            var telegramId = long.Parse(principal.FindFirst("tg_id")!.Value);
+            var subClaim = principal.FindFirst("sub")?.Value;
+            var tgClaim = principal.FindFirst("tg_id")?.Value;
+
+            if (string.IsNullOrEmpty(subClaim) || string.IsNullOrEmpty(tgClaim))
+            {
+                _logger.LogWarning(
+                    "Token exchange: missing claims. sub='{Sub}' tg_id='{Tg}'. AllClaims: {Claims}",
+                    subClaim ?? "null",
+                    tgClaim ?? "null",
+                    string.Join(",", principal.Claims.Select(c => $"{c.Type}={c.Value}")));
+                return Unauthorized(new { error = "invalid_token" });
+            }
+
+            if (!long.TryParse(subClaim, out var userId))
+                return Unauthorized(new { error = "invalid_token" });
+            if (!long.TryParse(tgClaim, out var telegramId))
+                return Unauthorized(new { error = "invalid_token" });
+
             var isAdmin = principal.FindFirst("is_admin")?.Value == "true";
 
             var user = await _users.GetByIdAsync(userId, ct);
-            if (user is null) return NotFound();
+            if (user is null)
+            {
+                _logger.LogWarning("Token exchange: user {UserId} not found in DB", userId);
+                return NotFound();
+            }
 
             var longToken = _jwt.GenerateToken(userId, telegramId, isAdmin);
+
+            _logger.LogInformation("Token exchanged for userId={UserId} (tg={TgId})", userId, telegramId);
 
             return Ok(new AuthResponseDto
             {
@@ -157,7 +186,7 @@ public class AuthController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Token exchange failed: {Message}", ex.Message);
+            _logger.LogError(ex, "Token exchange failed");
             return Unauthorized(new { error = "invalid_token" });
         }
     }
