@@ -10,3 +10,9 @@ public class BookingStats
     public int Upcoming { get; set; }
     public int RevenueRub { get; set; }
 }
+
+public class DailyBookingCount
+{
+    public DateTime Date { get; set; }
+    public int Count { get; set; }
+}
