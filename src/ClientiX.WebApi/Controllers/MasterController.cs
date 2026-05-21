@@ -77,4 +77,39 @@ public class MasterController : ControllerBase
 
         return Ok(new { today = statsToday, week = statsWeek, month = statsMonth });
     }
+
+    [HttpGet("stats/daily")]
+    public async Task<IActionResult> GetDailyStats(CancellationToken ct)
+    {
+        var userId = GetCurrentUserId();
+        if (userId == 0) return Unauthorized();
+
+        var user = await _users.GetByIdAsync(userId, ct);
+        if (user is null) return NotFound();
+
+        var tz = user.TimeZone;
+        var nowLocal = ClientiX.Infrastructure.TimeZones.NowInZone(tz);
+        var todayStartLocal = nowLocal.Date;
+        var monthStartLocal = todayStartLocal.AddDays(-29);
+
+        var todayEndUtc = ClientiX.Infrastructure.TimeZones.ZoneToUtc(todayStartLocal.AddDays(1), tz);
+        var monthStartUtc = ClientiX.Infrastructure.TimeZones.ZoneToUtc(monthStartLocal, tz);
+
+        var daily = await _users.GetDailyBookingsAsync(userId, monthStartUtc, todayEndUtc, ct);
+
+        // Заполним недостающие дни нулями, чтобы график был непрерывным
+        var result = new List<object>();
+        for (int i = 0; i < 30; i++)
+        {
+            var localDate = monthStartLocal.AddDays(i);
+            var matched = daily.FirstOrDefault(d => d.Date.Date == localDate.Date);
+            result.Add(new
+            {
+                date = localDate.ToString("yyyy-MM-dd"),
+                count = matched?.Count ?? 0
+            });
+        }
+
+        return Ok(result);
+    }
 }

@@ -743,4 +743,23 @@ public class UserRepository
 
         return count;
     }
+
+    public async Task<List<DailyBookingCount>> GetDailyBookingsAsync(
+    long masterUserId, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    {
+        var rows = await _db.Bookings
+            .Where(b => b.UserId == masterUserId
+                     && b.StartsAt >= fromUtc
+                     && b.StartsAt < toUtc
+                     && b.Status != "cancelled_by_client"
+                     && b.Status != "cancelled_by_master")
+            .Select(b => b.StartsAt.Date)
+            .ToListAsync(ct);
+
+        return rows
+            .GroupBy(d => d)
+            .Select(g => new DailyBookingCount { Date = g.Key, Count = g.Count() })
+            .OrderBy(d => d.Date)
+            .ToList();
+    }
 }
