@@ -19,13 +19,13 @@ export function AuthCallbackPage() {
             return;
         }
 
-        // Обмениваем короткий токен на долгий через WebApi
         axios
             .post(`${API_BASE}/auth/exchange`, { shortToken })
             .then((response) => {
                 localStorage.setItem('jwt', response.data.token);
                 localStorage.setItem('user', JSON.stringify(response.data));
 
+                // Если админ — на /admin, иначе на /dashboard
                 if (response.data.isAdmin) {
                     navigate('/admin', { replace: true });
                 } else {

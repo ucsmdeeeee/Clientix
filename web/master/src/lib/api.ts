@@ -7,7 +7,6 @@ export const api = axios.create({
     timeout: 15000,
 });
 
-// Автоматически добавляем JWT в каждый запрос
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem('jwt');
     if (token) {
@@ -16,7 +15,6 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
-// При 401 — кикаем на логин
 api.interceptors.response.use(
     (response) => response,
     (error) => {
@@ -31,7 +29,6 @@ api.interceptors.response.use(
     }
 );
 
-// Типы
 export interface TelegramLoginData {
     id: number;
     first_name?: string;
@@ -66,7 +63,6 @@ export interface MasterMe {
     reminderExtraHours?: number;
 }
 
-// Статистика — формат от backend (BookingStats)
 export interface BookingStats {
     total: number;
     completed: number;
@@ -88,7 +84,30 @@ export interface DailyStat {
     count: number;
 }
 
-// API методы
+// Admin типы
+export interface AdminDashboard {
+    totalMasters: number;
+    activeBots: number;
+    paying: number;
+    trial: number;
+    totalBookings30d: number;
+    completedBookings30d: number;
+    revenue30d: number;
+}
+
+export interface AdminMaster {
+    id: number;
+    telegramId: number;
+    firstName?: string;
+    username?: string;
+    city?: string;
+    niche?: string;
+    botUsername?: string;
+    isActive: boolean;
+    subscriptionStatus: string;
+    createdAt: string;
+}
+
 export const authApi = {
     loginWithTelegram: (data: TelegramLoginData) =>
         api.post<AuthResponse>('/auth/telegram', data),
@@ -100,8 +119,16 @@ export const masterApi = {
     getDailyStats: () => api.get<DailyStat[]>('/master/stats/daily'),
 };
 
-// Helper
+export const adminApi = {
+    getDashboard: () => api.get<AdminDashboard>('/admin/dashboard'),
+    getMasters: () => api.get<AdminMaster[]>('/admin/masters'),
+};
+
 export const isLoggedIn = () => !!localStorage.getItem('jwt');
+export const isAdmin = () => {
+    const u = getUser();
+    return u?.isAdmin === true;
+};
 
 export const logout = () => {
     localStorage.removeItem('jwt');
