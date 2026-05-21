@@ -177,7 +177,7 @@ export function DashboardPage() {
                                     borderRadius: '2px', color: '#E8E8E8',
                                 }} cursor={{ stroke: PLATINUM, strokeOpacity: 0.3 }}
                                     labelFormatter={(label) => `Дата: ${label}`}
-                                    formatter={(value: number) => [`${value} запис.`, 'Количество']} />
+                                    formatter={(value) => [`${value} запис.`, 'Количество'] as [string, string]} />
                                 <Line type="monotone" dataKey="count" stroke={PLATINUM} strokeWidth={2}
                                     dot={{ fill: PLATINUM, r: 3 }} activeDot={{ r: 6, fill: '#F5F5F5' }} />
                             </LineChart>
