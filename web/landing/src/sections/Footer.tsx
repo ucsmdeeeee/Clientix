@@ -1,4 +1,5 @@
 ﻿import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import logo from '../assets/logo.jpg';
 
 const PLATINUM = '#E8E8E8';
@@ -32,7 +33,6 @@ export function Footer() {
                             style={{ boxShadow: '0 0 30px rgba(232,232,232,0.15)' }}
                         />
                     </motion.div>
-
                     <h3 className="font-serif text-3xl md:text-4xl font-light text-cx-cream mb-3">
                         ClientiX
                     </h3>
@@ -40,16 +40,17 @@ export function Footer() {
                         Бот в Telegram для бьюти, тату и барбер мастеров.
                     </p>
 
-                    <div className="flex flex-wrap items-center justify-center gap-8 mb-12 text-sm">
+                    {/* Основные ссылки */}
+                    <div className="flex flex-wrap items-center justify-center gap-8 mb-10 text-sm">
                         {[
-                            { label: 'Главный бот', href: 'https://t.me/cl1ent1x_bot' },
-                            { label: 'Поддержка', href: 'https://t.me/ucsmdeeeee' },
-                            { label: 'Кабинет мастера', href: '/app' },
+                            { label: 'Главный бот', href: 'https://t.me/cl1ent1x_bot', external: true },
+                            { label: 'Поддержка', href: 'https://t.me/ucsmdeeeee', external: true },
+                            { label: 'Кабинет мастера', href: '/app/', external: true },
                         ].map((link) => (
                             <motion.a
                                 key={link.label}
                                 href={link.href}
-                                target={link.href.startsWith('http') ? '_blank' : undefined}
+                                target={link.external ? '_blank' : undefined}
                                 rel="noopener"
                                 whileHover={{ y: -2 }}
                                 className="font-light transition-colors relative group"
@@ -66,13 +67,34 @@ export function Footer() {
                         ))}
                     </div>
 
+                    {/* Правовые ссылки */}
+                    <div className="flex flex-wrap items-center justify-center gap-6 mb-10 text-xs">
+                        {[
+                            { label: 'Политика конфиденциальности', to: '/privacy' },
+                            { label: 'Публичная оферта', to: '/offer' },
+                            { label: 'Согласие на обработку ПД', to: '/consent' },
+                        ].map((link) => (
+                            <Link
+                                key={link.to}
+                                to={link.to}
+                                className="font-light transition-colors hover:text-cx-cream"
+                                style={{ color: '#6B6B6B' }}
+                            >
+                                {link.label}
+                            </Link>
+                        ))}
+                    </div>
+
                     <div
                         className="h-px w-24 mx-auto mb-8"
                         style={{ background: PLATINUM, opacity: 0.3 }}
                     />
 
-                    <p className="text-xs tracking-wider uppercase" style={{ color: '#6B6B6B' }}>
+                    <p className="text-xs tracking-wider uppercase mb-1" style={{ color: '#6B6B6B' }}>
                         © 2026 ClientiX. Все права защищены.
+                    </p>
+                    <p className="text-[11px] font-light" style={{ color: '#6B6B6B' }}>
+                        Самозанятый Снопов Д.Р. · ИНН 771573530010
                     </p>
                 </motion.div>
             </div>
