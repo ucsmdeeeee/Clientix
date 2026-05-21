@@ -9,6 +9,7 @@ import {
     type MasterMe,
     type MasterStats,
     type BookingStats,
+    type DailyStat,
     logout,
     getUser,
 } from '../lib/api';
@@ -21,14 +22,20 @@ const PLATINUM = '#E8E8E8';
 export function DashboardPage() {
     const [me, setMe] = useState<MasterMe | null>(null);
     const [stats, setStats] = useState<MasterStats | null>(null);
+    const [daily, setDaily] = useState<DailyStat[]>([]);
     const [loading, setLoading] = useState(true);
     const user = getUser();
 
     useEffect(() => {
-        Promise.all([masterApi.getMe(), masterApi.getStats()])
-            .then(([meRes, statsRes]) => {
+        Promise.all([
+            masterApi.getMe(),
+            masterApi.getStats(),
+            masterApi.getDailyStats(),
+        ])
+            .then(([meRes, statsRes, dailyRes]) => {
                 setMe(meRes.data);
                 setStats(statsRes.data);
+                setDaily(dailyRes.data);
             })
             .catch((err) => console.error('Dashboard load error', err))
             .finally(() => setLoading(false));
@@ -43,8 +50,16 @@ export function DashboardPage() {
         );
     }
 
-    // Mock data для графика - реальный график потребует endpoint /stats/daily
-    const chartData = generateMockChartData(stats?.month?.total ?? 0);
+    // Преобразуем daily в формат для графика — отображаем "DD.MM"
+    const chartData = daily.map((d) => {
+        const date = new Date(d.date);
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        return {
+            label: `${day}.${month}`,
+            count: d.count,
+        };
+    });
 
     return (
         <div className="relative min-h-screen overflow-hidden"
@@ -110,7 +125,6 @@ export function DashboardPage() {
                     <PeriodCard title="За 30 дней" stats={stats?.month} delay={0.3} highlight />
                 </div>
 
-                {/* Block: ближайшие записи через upcoming */}
                 {stats?.today && stats.today.upcoming > 0 && (
                     <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.6, delay: 0.35 }} className="relative p-6 mb-12 border"
@@ -145,22 +159,25 @@ export function DashboardPage() {
                                         WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
                                     }}>30 дней</span>
                             </h3>
-                            <p className="text-sm mt-1" style={{ color: '#A8A8A8' }}>Динамика по дням</p>
+                            <p className="text-sm mt-1" style={{ color: '#A8A8A8' }}>Реальная динамика по дням</p>
                         </div>
                         <TrendingUp className="w-6 h-6" style={{ color: PLATINUM }} />
                     </div>
                     <div style={{ height: 300 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={chartData}>
+                            <LineChart data={chartData} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#1F1F26" />
-                                <XAxis dataKey="day" stroke="#6B6B6B" fontSize={12}
-                                    tickLine={false} axisLine={{ stroke: '#1F1F26' }} />
-                                <YAxis stroke="#6B6B6B" fontSize={12}
+                                <XAxis dataKey="label" stroke="#6B6B6B" fontSize={11}
+                                    tickLine={false} axisLine={{ stroke: '#1F1F26' }}
+                                    interval="preserveStartEnd" />
+                                <YAxis stroke="#6B6B6B" fontSize={12} allowDecimals={false}
                                     tickLine={false} axisLine={{ stroke: '#1F1F26' }} />
                                 <Tooltip contentStyle={{
                                     background: '#16161A', border: '1px solid #1F1F26',
                                     borderRadius: '2px', color: '#E8E8E8',
-                                }} cursor={{ stroke: PLATINUM, strokeOpacity: 0.3 }} />
+                                }} cursor={{ stroke: PLATINUM, strokeOpacity: 0.3 }}
+                                    labelFormatter={(label) => `Дата: ${label}`}
+                                    formatter={(value: number) => [`${value} запис.`, 'Количество']} />
                                 <Line type="monotone" dataKey="count" stroke={PLATINUM} strokeWidth={2}
                                     dot={{ fill: PLATINUM, r: 3 }} activeDot={{ r: 6, fill: '#F5F5F5' }} />
                             </LineChart>
@@ -265,21 +282,4 @@ function Row({ icon: Icon, label, value, color }: any) {
             </span>
         </div>
     );
-}
-
-// Mock-генератор графика на основе общего количества записей
-function generateMockChartData(totalMonthly: number) {
-    // Если за месяц 0 записей — показываем плоский график
-    if (totalMonthly === 0) {
-        return Array.from({ length: 30 }, (_, i) => ({
-            day: `${i + 1}`,
-            count: 0,
-        }));
-    }
-    // Иначе равномерно распределяем + случайные колебания
-    const avgPerDay = totalMonthly / 30;
-    return Array.from({ length: 30 }, (_, i) => ({
-        day: `${i + 1}`,
-        count: Math.max(0, Math.round(avgPerDay + (Math.random() - 0.5) * avgPerDay * 0.8)),
-    }));
 }

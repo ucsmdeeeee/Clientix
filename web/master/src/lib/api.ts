@@ -83,6 +83,11 @@ export interface MasterStats {
     month: BookingStats;
 }
 
+export interface DailyStat {
+    date: string;
+    count: number;
+}
+
 // API методы
 export const authApi = {
     loginWithTelegram: (data: TelegramLoginData) =>
@@ -92,6 +97,7 @@ export const authApi = {
 export const masterApi = {
     getMe: () => api.get<MasterMe>('/master/me'),
     getStats: () => api.get<MasterStats>('/master/stats'),
+    getDailyStats: () => api.get<DailyStat[]>('/master/stats/daily'),
 };
 
 // Helper
