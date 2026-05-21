@@ -169,7 +169,7 @@ export function DashboardPage() {
 
 interface PeriodCardProps {
     title: string;
-    stats?: { count: number; completed: number; cancelled: number; noShow: number; revenue: number };
+    stats?: { total: number; completed: number; (cancelledByClient ?? 0) + (cancelledByMaster ?? 0): number; noShow: number; revenueRub: number };
     delay?: number;
     highlight?: boolean;
 }

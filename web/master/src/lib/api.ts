@@ -23,8 +23,8 @@ api.interceptors.response.use(
         if (error.response?.status === 401) {
             localStorage.removeItem('jwt');
             localStorage.removeItem('user');
-            if (window.location.pathname !== '/') {
-                window.location.href = '/';
+            if (window.location.pathname !== '/' && !window.location.pathname.endsWith('/app/')) {
+                window.location.href = '/app/';
             }
         }
         return Promise.reject(error);
@@ -62,20 +62,25 @@ export interface MasterMe {
     botUsername?: string;
     subscriptionStatus?: string;
     timezone?: string;
+    reminderDayBefore?: boolean;
+    reminderExtraHours?: number;
 }
 
-export interface DayStats {
-    count: number;
+// Статистика — формат от backend (BookingStats)
+export interface BookingStats {
+    total: number;
     completed: number;
-    cancelled: number;
     noShow: number;
-    revenue: number;
+    cancelledByClient: number;
+    cancelledByMaster: number;
+    upcoming: number;
+    revenueRub: number;
 }
 
 export interface MasterStats {
-    today: DayStats;
-    week: DayStats;
-    month: DayStats;
+    today: BookingStats;
+    week: BookingStats;
+    month: BookingStats;
 }
 
 // API методы
@@ -95,7 +100,7 @@ export const isLoggedIn = () => !!localStorage.getItem('jwt');
 export const logout = () => {
     localStorage.removeItem('jwt');
     localStorage.removeItem('user');
-    window.location.href = '/';
+    window.location.href = '/app/';
 };
 
 export const getUser = (): AuthResponse | null => {
