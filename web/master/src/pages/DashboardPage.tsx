@@ -1,10 +1,17 @@
 ﻿import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { CheckCircle, XCircle, AlertCircle, TrendingUp, LogOut } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, TrendingUp, LogOut, Calendar } from 'lucide-react';
 import {
     LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
-import { masterApi, type MasterMe, type MasterStats, logout, getUser } from '../lib/api';
+import {
+    masterApi,
+    type MasterMe,
+    type MasterStats,
+    type BookingStats,
+    logout,
+    getUser,
+} from '../lib/api';
 import { Particles } from '../components/Particles';
 import { AnimatedCounter } from '../components/AnimatedCounter';
 import logo from '../assets/logo.jpg';
@@ -36,7 +43,8 @@ export function DashboardPage() {
         );
     }
 
-    const chartData = generateMockChartData();
+    // Mock data для графика - реальный график потребует endpoint /stats/daily
+    const chartData = generateMockChartData(stats?.month?.total ?? 0);
 
     return (
         <div className="relative min-h-screen overflow-hidden"
@@ -98,9 +106,28 @@ export function DashboardPage() {
 
                 <div className="grid md:grid-cols-3 gap-6 mb-12">
                     <PeriodCard title="Сегодня" stats={stats?.today} delay={0.1} />
-                    <PeriodCard title="Эта неделя" stats={stats?.week} delay={0.2} />
-                    <PeriodCard title="Этот месяц" stats={stats?.month} delay={0.3} highlight />
+                    <PeriodCard title="За 7 дней" stats={stats?.week} delay={0.2} />
+                    <PeriodCard title="За 30 дней" stats={stats?.month} delay={0.3} highlight />
                 </div>
+
+                {/* Block: ближайшие записи через upcoming */}
+                {stats?.today && stats.today.upcoming > 0 && (
+                    <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.6, delay: 0.35 }} className="relative p-6 mb-12 border"
+                        style={{
+                            background: 'linear-gradient(135deg, #16161A 0%, #0D0D10 100%)',
+                            borderColor: '#1F1F26', borderRadius: '2px',
+                        }}>
+                        <div className="flex items-center gap-3">
+                            <Calendar className="w-5 h-5" style={{ color: PLATINUM }} />
+                            <p className="text-sm font-light text-cx-cream">
+                                Сегодня запланировано записей: <span className="font-medium" style={{ color: PLATINUM }}>
+                                    {stats.today.upcoming}
+                                </span>
+                            </p>
+                        </div>
+                    </motion.div>
+                )}
 
                 <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.6, delay: 0.4 }} className="relative p-8 border"
@@ -169,12 +196,14 @@ export function DashboardPage() {
 
 interface PeriodCardProps {
     title: string;
-    stats?: { total: number; completed: number; (cancelledByClient ?? 0) + (cancelledByMaster ?? 0): number; noShow: number; revenueRub: number };
+    stats?: BookingStats;
     delay?: number;
     highlight?: boolean;
 }
 
 function PeriodCard({ title, stats, delay = 0, highlight }: PeriodCardProps) {
+    const totalCancelled = (stats?.cancelledByClient ?? 0) + (stats?.cancelledByMaster ?? 0);
+
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay }}
@@ -188,6 +217,7 @@ function PeriodCard({ title, stats, delay = 0, highlight }: PeriodCardProps) {
                 borderRadius: '2px',
             }}>
             <p className="text-xs tracking-widest uppercase mb-4" style={{ color: '#6B6B6B' }}>{title}</p>
+
             <div className="flex items-baseline gap-2 mb-4">
                 <span className="font-serif text-5xl font-light"
                     style={{
@@ -195,15 +225,17 @@ function PeriodCard({ title, stats, delay = 0, highlight }: PeriodCardProps) {
                         WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
                         lineHeight: '1.2', paddingBottom: '0.1em',
                     }}>
-                    <AnimatedCounter target={stats?.count ?? 0} duration={1.2} />
+                    <AnimatedCounter target={stats?.total ?? 0} duration={1.2} />
                 </span>
                 <span className="text-sm font-light" style={{ color: '#A8A8A8' }}>записей</span>
             </div>
+
             <div className="space-y-2 text-sm">
                 <Row icon={CheckCircle} label="Выполнено" value={stats?.completed ?? 0} color="#4ADE80" />
-                <Row icon={XCircle} label="Отменено" value={stats?.cancelled ?? 0} color="#F87171" />
+                <Row icon={XCircle} label="Отменено" value={totalCancelled} color="#F87171" />
                 <Row icon={AlertCircle} label="Не пришли" value={stats?.noShow ?? 0} color="#FBBF24" />
             </div>
+
             <div className="mt-4 pt-4 border-t" style={{ borderColor: '#1F1F26' }}>
                 <div className="flex items-baseline justify-between">
                     <span className="text-xs tracking-widest uppercase" style={{ color: '#6B6B6B' }}>Доход</span>
@@ -213,7 +245,7 @@ function PeriodCard({ title, stats, delay = 0, highlight }: PeriodCardProps) {
                             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
                             lineHeight: '1.2', paddingBottom: '0.1em',
                         }}>
-                        <AnimatedCounter target={stats?.revenue ?? 0} duration={1.5}
+                        <AnimatedCounter target={stats?.revenueRub ?? 0} duration={1.5}
                             format={(v) => `${v.toLocaleString('ru-RU')} ₽`} />
                     </span>
                 </div>
@@ -235,9 +267,19 @@ function Row({ icon: Icon, label, value, color }: any) {
     );
 }
 
-function generateMockChartData() {
+// Mock-генератор графика на основе общего количества записей
+function generateMockChartData(totalMonthly: number) {
+    // Если за месяц 0 записей — показываем плоский график
+    if (totalMonthly === 0) {
+        return Array.from({ length: 30 }, (_, i) => ({
+            day: `${i + 1}`,
+            count: 0,
+        }));
+    }
+    // Иначе равномерно распределяем + случайные колебания
+    const avgPerDay = totalMonthly / 30;
     return Array.from({ length: 30 }, (_, i) => ({
         day: `${i + 1}`,
-        count: Math.floor(Math.random() * 8) + 1,
+        count: Math.max(0, Math.round(avgPerDay + (Math.random() - 0.5) * avgPerDay * 0.8)),
     }));
 }
