@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     Users, Bot, CreditCard, Calendar, CheckCircle, DollarSign,
-    LogOut, Search, Eye,
+    LogOut, Search,
 } from 'lucide-react';
 import {
     adminApi,
